@@ -38,14 +38,35 @@ evaporates the moment it can fetch its own sources. Fabricated references are th
 failure that costs an author their credibility rather than their time, so the
 architecture is built around making them detectable.
 
-## Quickstart
+## Install
+
+Not on npm. Install the release tarball, which is the same artifact `npm pack`
+produces — npm installs it from a URL directly:
+
+```bash
+npm install -g <RELEASE_TARBALL_URL>
+scribarium --version
+```
+
+<!-- Replace <RELEASE_TARBALL_URL> with the .tgz asset from the latest release. -->
+
+Or from source, if you want to change something:
+
+```bash
+git clone https://github.com/blitzcolo/pi-scribarium.git
+cd pi-scribarium
+npm install && npm run build && npm link
+```
 
 Requires Node >= 22.19 and a configured [pi](https://github.com/earendil-works/pi)
 provider — see [Models and credentials](#models-and-credentials) below.
 
-```bash
-npm install -g pi-scribarium
+To uninstall: `npm uninstall -g pi-scribarium` (or `npm unlink -g` for a source
+install).
 
+## Quickstart
+
+```bash
 scribarium init my-paper
 cd my-paper
 

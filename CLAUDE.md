@@ -102,6 +102,26 @@ rejected, since a step's model cannot depend on a previous step's output.
 
 For this machine: `--var bulk=deepseek/deepseek-v4-flash --var judgement=kimi-coding/k3-256k`.
 
+## Releases
+
+**Not published to npm.** Distribution is a GitHub release with the `npm pack` tarball attached;
+`npm install -g <url>` installs it directly, which is why the tarball has to be correct.
+
+```bash
+npm run typecheck && npm test && npm run build
+npm pack                       # -> pi-scribarium-<version>.tgz
+git tag v<version> && git push origin v<version>
+# attach the .tgz to the GitHub release, then update <RELEASE_TARBALL_URL> in README.md
+```
+
+- `files` excludes `dist/**/*.map`: the maps point at `src/`, which is not shipped, and carry no
+  `sourcesContent`, so they were 86 of 183 published files and every one was dead.
+- The CI job packs the tarball, installs it into an empty project, and greps the scaffolded
+  `pipeline.yaml` for real step ids. Not just `test -f`: `init` writes a one-step fallback stub when
+  the shipped pipeline is missing from the package, and that stub passes an existence check while
+  hiding exactly the packaging bug the test exists to catch.
+- `prepublishOnly` runs typecheck and tests, not just the build.
+
 ## Language
 
 All code, identifiers, comments, docs, and commit messages are in **English**.
