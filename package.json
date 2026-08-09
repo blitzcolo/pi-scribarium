@@ -25,6 +25,7 @@
   },
   "files": [
     "dist",
+    "!dist/**/*.map",
     "agents",
     "pipelines",
     "README.md",
@@ -38,7 +39,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest --run",
     "test:watch": "vitest",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "~0.84.1",

@@ -48,4 +48,9 @@ jobs:
           npx scribarium version
           npx scribarium agents | grep -q corpus-analyst
           npx scribarium init ./demo >/dev/null
-          test -f ./demo/pipeline.yaml
+          # Not just that a pipeline exists: `init` falls back to a one-step stub
+          # when the shipped file is missing from the tarball, and that stub would
+          # satisfy `test -f`. Assert the real pipeline came across.
+          grep -q "id: analyze-references" ./demo/pipeline.yaml
+          grep -q "id: check-citations" ./demo/pipeline.yaml
+          test -d ./demo/references
