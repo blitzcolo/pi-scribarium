@@ -1,0 +1,27 @@
+# Build output
+dist/
+*.tsbuildinfo
+
+# Dependencies
+node_modules/
+
+# Pipeline run output (artifacts, sessions, logs, checkpoints)
+runs/
+examples/**/runs/
+examples/**/corpus/text/
+
+# Test / tooling
+coverage/
+.vitest/
+*.log
+
+# Local environment
+.env
+.env.*
+!.env.example
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
