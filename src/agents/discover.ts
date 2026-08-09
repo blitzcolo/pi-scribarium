@@ -1,11 +1,13 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
 
 import { AgentDefinitionError } from "../util/errors.js";
 import { parseAgentFile } from "./parse.js";
+import { shippedAgentsDir } from "./shipped.js";
+
+export { shippedAgentsDir } from "./shipped.js";
 import type { AgentDefinition, AgentSource } from "./types.js";
 
 export interface Diagnostic {
@@ -30,13 +32,6 @@ export interface DiscoverResult {
 	diagnostics: Diagnostic[];
 	/** The directories actually searched, in precedence order (lowest first). */
 	searched: Array<{ dir: string; source: AgentSource }>;
-}
-
-/** Directory holding the agent definitions shipped inside this package. */
-export function shippedAgentsDir(): string {
-	// dist/agents/discover.js -> package root
-	const here = path.dirname(fileURLToPath(import.meta.url));
-	return path.resolve(here, "..", "..", "agents");
 }
 
 /**

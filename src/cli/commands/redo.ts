@@ -6,7 +6,6 @@ import { RunStateStore } from "../../workspace/run-state.js";
 
 export interface RedoOptions {
 	workspace: string;
-	agentDir: string;
 	stepId: string;
 	runId?: string;
 	feedback?: string;

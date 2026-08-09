@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-import { shippedAgentsDir } from "../../agents/discover.js";
+import { shippedPipelinesDir } from "../../agents/shipped.js";
 import { UsageError } from "../../util/errors.js";
 
 /**
@@ -36,7 +36,7 @@ export function commandInit(target: string, force: boolean): number {
 	writeIfAbsent(path.join(root, "source", "_README.md"), SOURCE_README, force);
 	writeIfAbsent(path.join(root, "README.md"), workspaceReadme(path.basename(root)), force);
 
-	const shippedPipeline = path.join(shippedAgentsDir(), "..", "pipelines", "paper.yaml");
+	const shippedPipeline = path.join(shippedPipelinesDir(), "paper.yaml");
 	const pipeline = fs.existsSync(shippedPipeline)
 		? fs.readFileSync(shippedPipeline, "utf-8")
 		: FALLBACK_PIPELINE;

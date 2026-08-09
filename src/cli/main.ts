@@ -2,22 +2,32 @@
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 
-import { getAgentDir, ModelRuntime } from "@earendil-works/pi-coding-agent";
-
-import { AgentRegistry } from "../agents/registry.js";
+import { commandDecide } from "./commands/decide.js";
 import { commandEvents, commandReport, commandStatus } from "./commands/inspect.js";
-import { commandRun } from "./commands/run.js";
 import { commandInit } from "./commands/init.js";
 import { commandRedo } from "./commands/redo.js";
-import { commandDecide, commandResume } from "./commands/resume.js";
 import { collectCorpusInputs, formatPageRanges, ingestCorpus } from "../ingest/pdf.js";
-import { readRunDefaults } from "../runtime/defaults.js";
-import { preflightModels } from "../runtime/model.js";
-import { runStage } from "../runtime/run-stage.js";
 import { PreflightError, ScribariumError, UsageError } from "../util/errors.js";
 import { assertDepthAllowed } from "../util/safety.js";
 import { VERSION } from "../version.js";
 import { flagAll, flagBoolean, flagString, parseArgs, type ParsedArgs } from "./args.js";
+// Type-only: erased at compile time, so it costs nothing at runtime.
+import type { RunStageResult } from "../runtime/run-stage.js";
+
+/**
+ * Anything reaching the pi SDK is imported at the point of use, never here.
+ *
+ * The SDK is ~20 000 files. Resolving them costs about 0.4 s on a local disk
+ * and, measured on a WSL2 9p mount, over twenty — and a top-level import makes
+ * every command pay it, including `--help`. Roughly half the command surface
+ * (init, status, report, events, redo, ingest, approve, reject) touches no
+ * model at all and now loads none of it.
+ *
+ * The rule is mechanical: if a module transitively imports
+ * `@earendil-works/pi-coding-agent`, reach it through `await import(...)` inside
+ * the branch that needs it. `test/integration/cli-startup.test.ts` fails if a
+ * static import creeps back in.
+ */
 
 const HELP = `scribarium ${VERSION} — multi-agent orchestration for academic writing
 
@@ -113,10 +123,11 @@ async function main(argv: readonly string[]): Promise<number> {
 			return commandInit(target, flagBoolean(args, "force"));
 		}
 		case "run": {
-			const { workspace, agentDir } = resolveContext(args);
+			const { workspace, agentDir } = await resolveContext(args);
 			const pipeline = args.positionals[0];
 			const modelOverride = flagString(args, "model", "m");
 			const gateMode = flagString(args, "gate-mode");
+			const { commandRun } = await import("./commands/run.js");
 			return await commandRun({
 				workspace,
 				agentDir,
@@ -129,10 +140,11 @@ async function main(argv: readonly string[]): Promise<number> {
 			});
 		}
 		case "resume": {
-			const { workspace, agentDir } = resolveContext(args);
+			const { workspace, agentDir } = await resolveContext(args);
 			const runId = args.positionals[0];
 			const modelOverride = flagString(args, "model", "m");
 			const gateMode = flagString(args, "gate-mode");
+			const { commandResume } = await import("./commands/resume.js");
 			return await commandResume({
 				workspace,
 				agentDir,
@@ -145,21 +157,19 @@ async function main(argv: readonly string[]): Promise<number> {
 			});
 		}
 		case "redo": {
-			const { workspace, agentDir } = resolveContext(args);
 			const stepId = args.positionals[0];
 			if (stepId === undefined) throw new UsageError("redo requires a step id.");
 			const runId = args.positionals[1];
 			const feedback = flagString(args, "message", "m");
 			return commandRedo({
-				workspace,
-				agentDir,
+				workspace: resolveWorkspace(args),
 				stepId,
 				...(runId !== undefined ? { runId } : {}),
 				...(feedback !== undefined ? { feedback } : {}),
 			});
 		}
 		case "approve":
-			return commandDecide(resolveContext(args).workspace, args.positionals[0], args.positionals[1], {
+			return commandDecide(resolveWorkspace(args), args.positionals[0], args.positionals[1], {
 				kind: "approve",
 			});
 		case "reject": {
@@ -168,21 +178,21 @@ async function main(argv: readonly string[]): Promise<number> {
 				throw new UsageError('reject requires -m "what to change".');
 			}
 			const target = flagString(args, "target");
-			return commandDecide(resolveContext(args).workspace, args.positionals[0], args.positionals[1], {
+			return commandDecide(resolveWorkspace(args), args.positionals[0], args.positionals[1], {
 				kind: "reject",
 				feedback,
 				...(target !== undefined ? { target } : {}),
 			});
 		}
 		case "status":
-			return commandStatus(resolveContext(args).workspace, args.positionals[0], flagBoolean(args, "json"));
+			return commandStatus(resolveWorkspace(args), args.positionals[0], flagBoolean(args, "json"));
 		case "report":
 		case "cost":
-			return commandReport(resolveContext(args).workspace, args.positionals[0], flagBoolean(args, "json"));
+			return commandReport(resolveWorkspace(args), args.positionals[0], flagBoolean(args, "json"));
 		case "events":
-			return commandEvents(resolveContext(args).workspace, args.positionals[0]);
+			return commandEvents(resolveWorkspace(args), args.positionals[0]);
 		case "agents":
-			return commandAgents(args);
+			return await commandAgents(args);
 		case "validate":
 			return await commandValidate(args);
 		case "ingest":
@@ -206,20 +216,38 @@ function parseVarFlags(args: ParsedArgs): Record<string, string> {
 	return vars;
 }
 
-function resolveContext(args: ParsedArgs): { workspace: string; agentDir: string } {
-	return {
-		workspace: path.resolve(flagString(args, "workspace", "w") ?? process.cwd()),
-		agentDir: flagString(args, "agent-dir") ?? getAgentDir(),
-	};
+/** Pure path resolution — no SDK, so the cheap commands stay cheap. */
+function resolveWorkspace(args: ParsedArgs): string {
+	return path.resolve(flagString(args, "workspace", "w") ?? process.cwd());
 }
 
-function loadRegistry(args: ParsedArgs): AgentRegistry {
-	const { workspace, agentDir } = resolveContext(args);
+/**
+ * pi's config directory.
+ *
+ * `getAgentDir()` is a one-line function, but it reads pi's own notion of where
+ * its config lives, and reimplementing that here would silently diverge the day
+ * upstream changes it. So it is loaded lazily instead of copied — an explicit
+ * `--agent-dir` skips the import entirely.
+ */
+async function resolveAgentDir(args: ParsedArgs): Promise<string> {
+	const explicit = flagString(args, "agent-dir");
+	if (explicit !== undefined) return explicit;
+	const { getAgentDir } = await import("@earendil-works/pi-coding-agent");
+	return getAgentDir();
+}
+
+async function resolveContext(args: ParsedArgs): Promise<{ workspace: string; agentDir: string }> {
+	return { workspace: resolveWorkspace(args), agentDir: await resolveAgentDir(args) };
+}
+
+async function loadRegistry(args: ParsedArgs) {
+	const { workspace, agentDir } = await resolveContext(args);
+	const { AgentRegistry } = await import("../agents/registry.js");
 	return AgentRegistry.load({ cwd: workspace, workspaceDir: workspace, agentDir });
 }
 
-function commandAgents(args: ParsedArgs): number {
-	const registry = loadRegistry(args);
+async function commandAgents(args: ParsedArgs): Promise<number> {
+	const registry = await loadRegistry(args);
 	const agents = registry.list();
 
 	if (agents.length === 0) {
@@ -245,7 +273,7 @@ function commandAgents(args: ParsedArgs): number {
 }
 
 async function commandValidate(args: ParsedArgs): Promise<number> {
-	const registry = loadRegistry(args);
+	const registry = await loadRegistry(args);
 
 	for (const diagnostic of registry.diagnostics) {
 		process.stderr.write(`error: ${diagnostic.filePath}: ${diagnostic.message}\n`);
@@ -257,6 +285,8 @@ async function commandValidate(args: ParsedArgs): Promise<number> {
 		`Loaded ${registry.list().length} agent(s); checking ${refs.length} pinned model reference(s).\n`,
 	);
 
+	const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
+	const { preflightModels } = await import("../runtime/model.js");
 	const modelRuntime = await ModelRuntime.create();
 	await preflightModels(modelRuntime, refs);
 	for (const ref of refs) process.stdout.write(`  ok  ${ref}\n`);
@@ -264,9 +294,10 @@ async function commandValidate(args: ParsedArgs): Promise<number> {
 	// Agents without a `model:` resolve through the configured default, so an
 	// empty ref list must not be mistaken for a working setup: with no default
 	// and no credentials, every stage would fail at its first prompt.
-	const { workspace, agentDir } = resolveContext(args);
+	const { workspace, agentDir } = await resolveContext(args);
 	const pinnedAll = registry.list().every((agent) => agent.modelRef !== undefined);
 	if (!pinnedAll) {
+		const { readRunDefaults } = await import("../runtime/defaults.js");
 		const fallback = flagString(args, "model", "m") ?? readRunDefaults(workspace, agentDir).modelRef;
 		if (fallback !== undefined) {
 			await preflightModels(modelRuntime, [fallback]);
@@ -303,7 +334,8 @@ const WORKSPACE_INGESTS: ReadonlyArray<{
 ];
 
 async function commandIngest(args: ParsedArgs): Promise<number> {
-	const { workspace } = resolveContext(args);
+	// Ingest is deterministic and model-free, so it must not drag the SDK in.
+	const workspace = resolveWorkspace(args);
 	const force = flagBoolean(args, "force");
 
 	const explicit = args.positionals.length > 0;
@@ -377,15 +409,20 @@ async function commandIngest(args: ParsedArgs): Promise<number> {
 }
 
 async function commandRunAgent(args: ParsedArgs): Promise<number> {
-	const { workspace, agentDir } = resolveContext(args);
 	const [name] = args.positionals;
 	if (name === undefined) {
 		process.stderr.write("run-agent requires an agent name.\n");
 		return 2;
 	}
 
-	const agent = loadRegistry(args).get(name);
+	const { workspace, agentDir } = await resolveContext(args);
+	const agent = (await loadRegistry(args)).get(name);
 	const task = await resolveTask(args, workspace);
+
+	const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
+	const { readRunDefaults } = await import("../runtime/defaults.js");
+	const { preflightModels } = await import("../runtime/model.js");
+	const { runStage } = await import("../runtime/run-stage.js");
 
 	const defaults = readRunDefaults(workspace, agentDir);
 	const overrideModel = flagString(args, "model", "m");
@@ -444,7 +481,7 @@ async function resolveTask(args: ParsedArgs, workspace: string): Promise<string>
 	return `Work on the document at ${path.relative(workspace, resolved) || resolved}.\n\n${body}`;
 }
 
-function formatSummary(result: Awaited<ReturnType<typeof runStage>>): string {
+function formatSummary(result: RunStageResult): string {
 	const { usage } = result;
 	return [
 		`status   ${result.status}`,

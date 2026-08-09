@@ -23,6 +23,30 @@ node dist/cli/main.js report <runId>
 symbol the orchestrator relies on, so `npm run typecheck` fails loudly if an upstream release
 changes their shape. Keep it in the build, not the test tree.
 
+## Startup cost
+
+**Nothing reaching the pi SDK may be imported statically from `src/cli/main.ts`.** The SDK is
+~20 000 files; resolving them costs ~0.4 s on a local disk and **over 20 s on a WSL2 `/mnt/*` 9p
+mount**, and a static import charges that to every command, `--help` included.
+
+- Commands that need a model — `run`, `resume`, `validate`, `run-agent`, `agents` — reach their
+  modules through `await import(...)` inside their own branch. The rest (`init`, `status`,
+  `report`, `events`, `redo`, `ingest`, `approve`, `reject`) load none of it: measured 22.1 s → 0.9 s.
+- `resolveWorkspace()` is SDK-free; `resolveAgentDir()` is async and imports `getAgentDir` lazily.
+  Do **not** reimplement `getAgentDir` locally to avoid the import — it encodes pi's own notion of
+  where its config lives and would diverge silently.
+- `shippedAgentsDir`/`shippedPipelinesDir` live in `agents/shipped.ts`, apart from
+  `agents/discover.ts`, precisely because `init` needs only the path arithmetic. That was the
+  actual leak: pure path code sitting in an SDK-importing module cost every command 21 s.
+- `agents` and `validate` stay slow on purpose. `validate` constructs a `ModelRuntime`, and both
+  load agent definitions through the SDK's `parseFrontmatter` — which is kept deliberately (gotcha
+  #9) so our frontmatter parsing cannot drift from pi's.
+- `test/integration/cli-startup.test.ts` walks the static import graph of `src/` and fails with the
+  offending chain. It reads `src/`, not `dist/`, so it does not depend on a build having run.
+
+If the repository itself lives on `/mnt/*` under WSL, move it to the Linux filesystem — this
+mitigates the symptom for cheap commands but `run` still pays full price there.
+
 ## Models
 
 Two providers are configured. pi ships both as **built-in** providers with these models already in
