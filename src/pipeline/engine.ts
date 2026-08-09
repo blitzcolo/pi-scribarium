@@ -15,11 +15,20 @@ import {
 	type RunState,
 	type StepState,
 } from "../workspace/run-state.js";
+import { archiveAttempt, buildRegeneratePrompt } from "../gates/regenerate.js";
+import type { GateHandler } from "../gates/types.js";
 import { runBuiltin } from "./builtins.js";
 import { resolveItems } from "./items.js";
 import { mapPool } from "./pool.js";
 import { interpolate, type TemplateScope } from "./template.js";
-import type { AgentStepSpec, ForeachItem, ForeachStepSpec, PipelineSpec, StepSpec } from "./schema.js";
+import type {
+	AgentStepSpec,
+	ForeachItem,
+	ForeachStepSpec,
+	GateStepSpec,
+	PipelineSpec,
+	StepSpec,
+} from "./schema.js";
 
 export interface RunPipelineOptions {
 	spec: PipelineSpec;
@@ -30,6 +39,8 @@ export interface RunPipelineOptions {
 	agentDir: string;
 	defaultModelRef?: string;
 	defaultThinking?: ThinkingLevelName;
+	/** Decides what happens at a gate. Defaults to auto-approve. */
+	gate?: GateHandler;
 	signal?: AbortSignal;
 	onEvent?: (event: PipelineEvent) => void;
 }
@@ -48,7 +59,9 @@ export type PipelineEvent =
 			total: number;
 			error?: string;
 	  }
-	| { type: "stage"; stepId: string; itemId?: string; event: StageEvent };
+	| { type: "stage"; stepId: string; itemId?: string; event: StageEvent }
+	| { type: "gate_awaiting"; stepId: string; title: string }
+	| { type: "gate_decided"; stepId: string; decision: string; target?: string };
 
 /**
  * Execute a pipeline in order.
@@ -66,11 +79,39 @@ export async function runPipeline(options: RunPipelineOptions): Promise<RunState
 
 	log.append("run_start", { pipeline: spec.name, steps: spec.steps.length });
 
-	for (const [index, step] of spec.steps.entries()) {
+	// Index-driven rather than a for..of: a rejected gate rewinds to an earlier
+	// step, which a simple iteration cannot express.
+	let index = 0;
+	while (index < spec.steps.length) {
+		const step = spec.steps[index] as StepSpec;
 		const existing = state.steps[step.id];
-		if (existing?.status === "completed") {
+		if (existing?.status === "completed" || existing?.status === "skipped") {
 			// Resume: this step already finished in an earlier attempt.
-			onEvent?.({ type: "log", message: `skipping completed step ${step.id}` });
+			onEvent?.({ type: "log", message: `skipping ${existing.status} step ${step.id}` });
+			index++;
+			continue;
+		}
+
+		if (step.kind === "gate") {
+			const outcome = await executeGate(step, options, state, store, log);
+			if (outcome.kind === "defer") {
+				state.status = "awaiting_gate";
+				state.cursor = { stepIndex: index, stepId: step.id };
+				store.save(state);
+				log.append("run_end", { status: "awaiting_gate", stepId: step.id });
+				return state;
+			}
+			if (outcome.kind === "abort") {
+				state.status = "aborted";
+				store.save(state);
+				log.append("run_end", { status: "aborted", stepId: step.id });
+				return state;
+			}
+			if (outcome.kind === "rewind") {
+				index = spec.steps.findIndex((candidate) => candidate.id === outcome.target);
+				continue;
+			}
+			index++;
 			continue;
 		}
 
@@ -82,6 +123,17 @@ export async function runPipeline(options: RunPipelineOptions): Promise<RunState
 			attempts: (existing?.attempts ?? 0) + 1,
 			startedAt: new Date().toISOString(),
 			outputs: [],
+			// Carried across attempts: a rejection stores feedback on this step and
+			// the retry must still see it, and the decision history is the audit
+			// trail for why the step ran more than once.
+			...(existing?.pendingFeedback !== undefined
+				? { pendingFeedback: existing.pendingFeedback }
+				: {}),
+			...(existing?.decisions !== undefined ? { decisions: existing.decisions } : {}),
+			// Item results survive a retry so a resumed fan-out can skip what it
+			// already finished; without this a killed thirty-paper run would pay
+			// for all thirty again.
+			...(existing?.items !== undefined ? { items: existing.items } : {}),
 		};
 		state.steps[step.id] = stepState;
 		store.save(state);
@@ -127,6 +179,7 @@ export async function runPipeline(options: RunPipelineOptions): Promise<RunState
 			log.append("run_end", { status: state.status });
 			return state;
 		}
+		index++;
 	}
 
 	state.status = "completed";
@@ -134,6 +187,123 @@ export async function runPipeline(options: RunPipelineOptions): Promise<RunState
 	store.save(state);
 	log.append("run_end", { status: state.status, usage: state.usageTotal });
 	return state;
+}
+
+type GateOutcome =
+	| { kind: "proceed" }
+	| { kind: "defer" }
+	| { kind: "abort" }
+	| { kind: "rewind"; target: string };
+
+/**
+ * Ask for a human decision.
+ *
+ * A rejection rewinds to `on_reject` and stores the feedback on that step, so
+ * the next execution folds it into the prompt. The gate itself is then reset to
+ * pending: after regenerating, the reviewer should be asked again rather than
+ * the run sailing past an approval that was never given.
+ */
+async function executeGate(
+	step: GateStepSpec,
+	options: RunPipelineOptions,
+	state: RunState,
+	store: RunStateStore,
+	log: EventLog,
+): Promise<GateOutcome> {
+	const { layout, onEvent } = options;
+	const handler = options.gate ?? (async () => ({ kind: "approve" as const }));
+
+	const artifacts = step.show.map((relative) => {
+		const absolutePath = layout.artifact(relative);
+		let bytes = 0;
+		let exists = false;
+		try {
+			bytes = fs.statSync(absolutePath).size;
+			exists = true;
+		} catch {
+			// Reported as missing rather than hidden: reviewing an artifact that
+			// was never written is exactly the case worth surfacing.
+		}
+		return { path: relative, absolutePath, bytes, exists };
+	});
+
+	const stepState: StepState = state.steps[step.id] ?? {
+		type: "gate",
+		status: "awaiting",
+		attempts: 0,
+		outputs: [],
+	};
+	stepState.type = "gate";
+	stepState.status = "awaiting";
+	state.steps[step.id] = stepState;
+	store.save(state);
+
+	onEvent?.({ type: "gate_awaiting", stepId: step.id, title: step.title });
+	log.append("gate_awaiting", { stepId: step.id });
+
+	const decision = await handler({
+		step,
+		runId: layout.runId,
+		workspace: layout.workspace,
+		artifacts,
+		usageSoFar: state.usageTotal,
+	});
+
+	if (decision === "defer") return { kind: "defer" };
+
+	(stepState.decisions ??= []).push({
+		at: new Date().toISOString(),
+		kind: decision.kind,
+		...(decision.kind === "reject" ? { feedback: decision.feedback } : {}),
+		...(decision.kind === "reject" && decision.target !== undefined
+			? { target: decision.target }
+			: {}),
+	});
+	stepState.attempts++;
+	onEvent?.({ type: "gate_decided", stepId: step.id, decision: decision.kind });
+	log.append("gate_decided", { stepId: step.id, decision: decision.kind });
+
+	switch (decision.kind) {
+		case "approve":
+			stepState.status = "completed";
+			store.save(state);
+			return { kind: "proceed" };
+
+		case "skip":
+			stepState.status = "skipped";
+			store.save(state);
+			return { kind: "proceed" };
+
+		case "abort":
+			stepState.status = "failed";
+			stepState.error = { code: "EXTERNAL_ABORT", message: "reviewer aborted the run" };
+			store.save(state);
+			return { kind: "abort" };
+
+		case "reject": {
+			const target = decision.target ?? step.onReject;
+			if (target === undefined || state.steps[target] === undefined) {
+				stepState.status = "failed";
+				stepState.error = {
+					code: "BUILTIN_ERROR",
+					message:
+						`rejected, but there is nothing to regenerate: ` +
+						`gate "${step.id}" has no on_reject target`,
+				};
+				store.save(state);
+				return { kind: "abort" };
+			}
+
+			const targetState = state.steps[target] as StepState;
+			targetState.pendingFeedback = decision.feedback;
+			// Re-open both the target and this gate so the loop runs them again.
+			targetState.status = "pending";
+			stepState.status = "awaiting";
+			store.save(state);
+			onEvent?.({ type: "gate_decided", stepId: step.id, decision: "reject", target });
+			return { kind: "rewind", target };
+		}
+	}
 }
 
 async function executeBuiltin(
@@ -195,8 +365,23 @@ async function runOneStage(
 	};
 	const task = buildTask(step, outputs, scopeWithOutputs);
 
+	const previous = state.steps[step.id];
+	const feedback = item === undefined ? previous?.pendingFeedback : undefined;
+	const finalTask =
+		feedback === undefined
+			? task
+			: buildRegeneratePrompt(
+					task,
+					archiveAttempt(layout, step.id, outputs, Math.max(1, (previous?.attempts ?? 1) - 1)),
+					feedback,
+				);
+
 	const logFile = layout.logFile(step.id, item?.id);
-	fs.writeFileSync(logFile, `# ${step.id}${item === undefined ? "" : ` / ${item.id}`}\n\n## Prompt\n\n${task}\n`, "utf-8");
+	fs.writeFileSync(
+		logFile,
+		`# ${step.id}${item === undefined ? "" : ` / ${item.id}`}\n\n## Prompt\n\n${finalTask}\n`,
+		"utf-8",
+	);
 
 	// Stages run with the workspace as cwd so a prompt can name corpus/text/x.md
 	// and analysis/x.md naturally. Parent directories are created up front: an
@@ -212,7 +397,7 @@ async function runOneStage(
 			...(step.maxTurns !== undefined ? { maxTurns: step.maxTurns } : {}),
 			...(step.timeoutMs !== undefined ? { timeoutMs: step.timeoutMs } : {}),
 		},
-		prompt: task,
+		prompt: finalTask,
 		cwd: layout.workspace,
 		agentDir: options.agentDir,
 		modelRuntime,
@@ -270,6 +455,7 @@ async function executeAgent(
 	}
 	stepState.outputs = outputs;
 	stepState.status = "completed";
+	delete stepState.pendingFeedback;
 }
 
 /**
@@ -289,7 +475,8 @@ async function executeForeach(
 	store: RunStateStore,
 ): Promise<void> {
 	const items = resolveItems(step.source, options.layout.workspace);
-	stepState.items = {};
+	const previous = stepState.items ?? {};
+	stepState.items = { ...previous };
 
 	if (items.length === 0) {
 		stepState.status = "failed";
@@ -304,20 +491,32 @@ async function executeForeach(
 		concurrency: Math.min(step.concurrency, items.length),
 	});
 
+	// Only what is not already done. Usage counts this attempt alone: totals from
+	// earlier attempts are already in the persisted run total.
+	const pending = items.filter((item) => previous[item.id]?.status !== "completed");
+	const carried = items.length - pending.length;
+
 	let usage = emptyUsage();
 	let turns = 0;
-	let completed = 0;
+	let completed = carried;
 	let failed = 0;
 
+	if (carried > 0) {
+		options.onEvent?.({
+			type: "log",
+			message: `      ${carried} item(s) already complete, skipping`,
+		});
+	}
+
 	const settled = await mapPool(
-		items,
+		pending,
 		step.concurrency,
 		async (item) => await runOneStage(step, options, state, item),
 		{
 			...(step.maxFailures !== undefined ? { maxFailures: step.maxFailures } : {}),
 			...(options.signal !== undefined ? { signal: options.signal } : {}),
 			onSettled: (index, outcome) => {
-				const item = items[index] as ForeachItem;
+				const item = pending[index] as ForeachItem;
 				const entry =
 					outcome.ok && outcome.value.error === undefined
 						? { status: "completed" as const, outputs: outcome.value.outputs }
@@ -357,9 +556,11 @@ async function executeForeach(
 
 	stepState.usage = usage;
 	stepState.turns = turns;
-	stepState.outputs = settled.flatMap((outcome) =>
-		outcome.ok && outcome.value.error === undefined ? outcome.value.outputs : [],
-	);
+	// Outputs span every completed item, carried-over ones included, because the
+	// reducer downstream reads the whole set rather than just this attempt's.
+	stepState.outputs = Object.values(stepState.items ?? {})
+		.filter((entry) => entry.status === "completed")
+		.flatMap((entry) => entry.outputs ?? []);
 
 	if (failed === 0) {
 		stepState.status = "completed";

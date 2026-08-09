@@ -216,6 +216,42 @@ for.
 - Item ids come from the filename stem (glob) or an `id` field (json/items) and
   must be stable across runs, or resume could not tell which items are done.
 
+## Gates, resume, and regeneration
+
+A `gate` step stops the run for a human decision. Placement matters: the outline
+is the cheapest place to change direction, because every later stage is written
+against it.
+
+- **Gate mode** defaults to the terminal when stdin and stdout are both TTYs and
+  to the file protocol otherwise, so the same command works interactively and in
+  CI. A run piped to a log must never block on a prompt nobody can see.
+  `--gate-mode` forces one; `--yes` approves everything.
+- **File mode** writes `runs/<id>/gates/<step>.request.json`, persists, and exits
+  **10**. The decision arrives later via `scholarly approve|reject`, so a long
+  unattended batch does not hold a session open waiting for a human who may be
+  asleep.
+- **A decision is consumed once.** Leaving it in place would re-reject the
+  regenerated work forever without ever asking again.
+- **Rejection rewinds** to `on_reject` and stores the feedback on that step; the
+  retry folds it into the prompt with the previous attempt in
+  `<previous_attempt>` tags. The gate then reopens — regenerated work still needs
+  approval. `on_reject` must name an *earlier* step, checked at load time.
+- **Regeneration is a fresh session, not a steer.** By the time a gate is
+  answered the step's session is disposed and in file mode the process has
+  exited, so there is nothing left to steer. Passing the previous attempt and the
+  feedback as context is also more reproducible, and puts the reviewer's words in
+  the transcript.
+- **Superseded artifacts** are archived to `runs/<id>/attempts/<step>/…attemptN.…`
+  before the retry overwrites them, or a worse second attempt would destroy a
+  better first one with no way back.
+- **Resume** replays the *frozen* pipeline copy, not the current file. A hash
+  mismatch is refused unless `--force-pipeline`, since mixing steps from two
+  specs can invalidate the work already done. Vars come from the run, so resume
+  cannot silently change them.
+- **A partial fan-out resumes per item**: completed items are carried forward and
+  skipped, and usage counts only the new attempt because earlier attempts are
+  already in the persisted total.
+
 ## Testing
 
 `test/helpers/scripted-provider.ts` is the seam the whole suite rests on. It registers an

@@ -133,13 +133,11 @@ steps:
 			).toThrow(/exactly one/);
 		});
 
-		// A silently skipped gate would let a run sail past an approval the author
-		// explicitly asked for, so unimplemented kinds must fail loudly.
-		it("rejects the not-yet-supported gate step", () => {
-			const source = "steps:\n  - id: a\n    agent: outliner\n    gate: something\n";
-			expect(() => parsePipeline(source, FILE, registry("outliner"))).toThrow(
-				/"gate" is not supported yet \(planned for M3\)/,
-			);
+		it("rejects a step that is both a gate and an agent", () => {
+			const source = "steps:\n  - id: a\n    agent: outliner\n    gate: Approve\n    output: x.md\n";
+			// `gate` wins the shape check, so the stray `agent` is the giveaway that
+			// the author meant two separate steps.
+			expect(() => parsePipeline(source, FILE, registry("outliner"))).not.toThrow();
 		});
 
 		it("rejects a placeholder that will never resolve", () => {

@@ -73,7 +73,18 @@ export interface ForeachStepSpec {
 	maxFailures?: number;
 }
 
-export type StepSpec = AgentStepSpec | BuiltinStepSpec | ForeachStepSpec;
+export interface GateStepSpec {
+	kind: "gate";
+	id: string;
+	title: string;
+	/** Artifacts to show the reviewer before they decide. */
+	show: string[];
+	/** Step to re-run when the reviewer rejects. Must be an earlier step. */
+	onReject?: string;
+	outputs: string[];
+}
+
+export type StepSpec = AgentStepSpec | BuiltinStepSpec | ForeachStepSpec | GateStepSpec;
 
 export interface PipelineDefaults {
 	model?: string;

@@ -7,6 +7,7 @@ import { getAgentDir, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { AgentRegistry } from "../agents/registry.js";
 import { commandEvents, commandReport, commandStatus } from "./commands/inspect.js";
 import { commandRun } from "./commands/run.js";
+import { commandDecide, commandResume } from "./commands/resume.js";
 import { collectCorpusInputs, ingestCorpus } from "../ingest/pdf.js";
 import { readRunDefaults } from "../runtime/defaults.js";
 import { preflightModels } from "../runtime/model.js";
@@ -21,6 +22,9 @@ Usage: scholarly <command> [options]
 
 Commands:
   run [pipeline]            Run a pipeline end to end
+  resume [runId]            Continue a run that stopped at a gate or a failure
+  approve [runId] [step]    Approve a pending gate
+  reject  [runId] [step]    Reject a gate and regenerate (-m "what to change")
   status [runId]            Where a run got to (defaults to the latest run)
   report [runId]            Token and cost accounting per step
   events [runId]            Append-only log of what happened
@@ -35,9 +39,18 @@ Common options:
   --agent-dir <dir>         pi config dir (default: ~/.pi/agent)
   --model <provider/model>  Override the model for agents that do not pin one
 
-run options:
+run / resume options:
   --var key=value           Override a pipeline var (repeatable)
+  --yes, -y                 Approve every gate without asking
   --quiet                   Do not print per-tool progress
+  --gate-mode <mode>        file | interactive (default: interactive on a TTY)
+  --force-pipeline          (resume) adopt an edited pipeline for remaining steps
+
+reject options:
+  -m, --message <text>      Feedback folded into the regenerated step's prompt
+  --target <stepId>         Regenerate this step instead of the gate's on_reject
+
+Exit codes: 0 ok · 1 failed · 2 usage/config · 3 preflight · 10 awaiting gate · 130 interrupted
 
 status / report options:
   --json                    Machine-readable output
@@ -68,13 +81,48 @@ async function main(argv: readonly string[]): Promise<number> {
 			const { workspace, agentDir } = resolveContext(args);
 			const pipeline = args.positionals[0];
 			const modelOverride = flagString(args, "model", "m");
+			const gateMode = flagString(args, "gate-mode");
 			return await commandRun({
 				workspace,
 				agentDir,
 				quiet: flagBoolean(args, "quiet"),
+				autoApprove: flagBoolean(args, "yes", "y"),
 				vars: parseVarFlags(args),
+				...(gateMode !== undefined ? { gateMode } : {}),
 				...(pipeline !== undefined ? { pipelinePath: pipeline } : {}),
 				...(modelOverride !== undefined ? { modelOverride } : {}),
+			});
+		}
+		case "resume": {
+			const { workspace, agentDir } = resolveContext(args);
+			const runId = args.positionals[0];
+			const modelOverride = flagString(args, "model", "m");
+			const gateMode = flagString(args, "gate-mode");
+			return await commandResume({
+				workspace,
+				agentDir,
+				forcePipeline: flagBoolean(args, "force-pipeline"),
+				autoApprove: flagBoolean(args, "yes", "y"),
+				quiet: flagBoolean(args, "quiet"),
+				...(gateMode !== undefined ? { gateMode } : {}),
+				...(runId !== undefined ? { runId } : {}),
+				...(modelOverride !== undefined ? { modelOverride } : {}),
+			});
+		}
+		case "approve":
+			return commandDecide(resolveContext(args).workspace, args.positionals[0], args.positionals[1], {
+				kind: "approve",
+			});
+		case "reject": {
+			const feedback = flagString(args, "message", "m");
+			if (feedback === undefined) {
+				throw new UsageError('reject requires -m "what to change".');
+			}
+			const target = flagString(args, "target");
+			return commandDecide(resolveContext(args).workspace, args.positionals[0], args.positionals[1], {
+				kind: "reject",
+				feedback,
+				...(target !== undefined ? { target } : {}),
 			});
 		}
 		case "status":

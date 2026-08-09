@@ -12,6 +12,7 @@ import {
 	type BuiltinStepSpec,
 	type ForeachSource,
 	type ForeachStepSpec,
+	type GateStepSpec,
 	type PipelineSpec,
 	type StepSpec,
 } from "./schema.js";
@@ -34,6 +35,9 @@ const KNOWN_STEP_KEYS = new Set([
 	"foreach",
 	"parallel",
 	"max_failures",
+	"gate",
+	"show",
+	"on_reject",
 ]);
 
 /**
@@ -135,16 +139,6 @@ function readStep(
 	}
 	const step = raw as Record<string, unknown>;
 
-	// Reject reserved-but-unimplemented kinds explicitly. Silently skipping a
-	// `gate` would let a run sail past an approval the author asked for.
-	for (const [key, milestone] of [["gate", "M3"]] as const) {
-		if (step[key] !== undefined) {
-			throw new PipelineError(
-				`${ctx.at(["steps", index, key])}: "${key}" is not supported yet (planned for ${milestone})`,
-			);
-		}
-	}
-
 	for (const key of Object.keys(step)) {
 		if (!KNOWN_STEP_KEYS.has(key)) {
 			throw new PipelineError(
@@ -162,6 +156,24 @@ function readStep(
 	}
 
 	const outputs = readOutputs(step["output"] ?? step["outputs"], ["steps", index, "output"], ctx);
+
+	if (step["gate"] !== undefined) {
+		const title =
+			typeof step["gate"] === "string" && step["gate"].trim().length > 0
+				? step["gate"].trim()
+				: `Approve ${id}`;
+		const onReject = optionalString(step["on_reject"], ["steps", index, "on_reject"], ctx);
+		const gate: GateStepSpec = {
+			kind: "gate",
+			id,
+			title,
+			show: readOutputs(step["show"], ["steps", index, "show"], ctx),
+			outputs,
+			...(onReject !== undefined ? { onReject } : {}),
+		};
+		return gate;
+	}
+
 	const hasAgent = step["agent"] !== undefined;
 	const hasBuiltin = step["builtin"] !== undefined;
 
@@ -269,7 +281,11 @@ function validateReferences(spec: PipelineSpec, ctx: Context, registry?: AgentRe
 	const producedBy = new Map<string, number>();
 
 	for (const [index, step] of spec.steps.entries()) {
-		if (step.kind !== "builtin" && registry !== undefined && !registry.has(step.agent)) {
+		if (
+			(step.kind === "agent" || step.kind === "foreach") &&
+			registry !== undefined &&
+			!registry.has(step.agent)
+		) {
 			throw new PipelineError(
 				`${ctx.at(["steps", index, "agent"])}: unknown agent "${step.agent}". ` +
 					`Known agents: ${registry.names().join(", ") || "(none found)"}`,
@@ -287,7 +303,10 @@ function validateReferences(spec: PipelineSpec, ctx: Context, registry?: AgentRe
 		}
 
 		const templates = [
-			...(step.kind !== "builtin" && step.input !== undefined ? [step.input] : []),
+			...((step.kind === "agent" || step.kind === "foreach") && step.input !== undefined
+				? [step.input]
+				: []),
+			...(step.kind === "gate" ? step.show : []),
 			...step.outputs,
 			...(step.kind === "builtin" ? Object.values(step.with).filter(isString) : []),
 		];
@@ -299,6 +318,18 @@ function validateReferences(spec: PipelineSpec, ctx: Context, registry?: AgentRe
 				throw new PipelineError(
 					`${ctx.at(["steps", index])}: step "${step.id}" references \${${reference}}, ` +
 						`which is not in scope. Available: ${[...scope].sort().join(", ")}`,
+				);
+			}
+		}
+
+		// A gate that rejects must jump back to a step that has already run,
+		// otherwise "regenerate" would target something that produced nothing.
+		if (step.kind === "gate" && step.onReject !== undefined) {
+			const target = producedBy.get(step.onReject);
+			if (target === undefined) {
+				throw new PipelineError(
+					`${ctx.at(["steps", index, "on_reject"])}: on_reject must name an earlier step, ` +
+						`and "${step.onReject}" is not one. Earlier steps: ${[...producedBy.keys()].join(", ") || "(none)"}`,
 				);
 			}
 		}

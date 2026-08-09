@@ -62,3 +62,10 @@ steps:
     output:
       - outline/outline.md
       - outline/sections.json
+
+  # Stop here. The outline is the cheapest place to change direction: every
+  # later stage is written against it.
+  - id: approve-outline
+    gate: Approve the outline before drafting
+    show: outline/outline.md
+    on_reject: outline

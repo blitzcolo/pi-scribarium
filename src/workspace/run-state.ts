@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
+import type { GateDecisionRecord } from "../gates/types.js";
 import type { StageErrorCode, StageUsage } from "../runtime/run-stage.js";
 import { ScribariumError } from "../util/errors.js";
 import type { RunLayout } from "./layout.js";
@@ -8,7 +9,13 @@ import type { RunLayout } from "./layout.js";
 export const RUN_STATE_VERSION = 1;
 
 export type RunStatus = "running" | "awaiting_gate" | "completed" | "failed" | "aborted";
-export type StepStatus = "pending" | "running" | "completed" | "failed" | "skipped";
+export type StepStatus =
+	| "pending"
+	| "running"
+	| "completed"
+	| "failed"
+	| "skipped"
+	| "awaiting";
 
 export interface StepError {
 	code: StageErrorCode | "MISSING_OUTPUT" | "BUILTIN_ERROR";
@@ -28,8 +35,12 @@ export interface StepState {
 	model?: string;
 	sessionFile?: string;
 	error?: StepError;
-	/** Populated for fan-out steps in M2. */
+	/** Populated for fan-out steps. */
 	items?: Record<string, { status: StepStatus; outputs?: string[]; error?: StepError }>;
+	/** Gate steps: every decision taken, in order. */
+	decisions?: GateDecisionRecord[];
+	/** Feedback to fold into the next run of this step, set by a rejection. */
+	pendingFeedback?: string;
 }
 
 export interface RunState {
