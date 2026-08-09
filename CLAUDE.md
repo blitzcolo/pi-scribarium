@@ -8,13 +8,20 @@ in-process agent session; stages share nothing but files in the workspace direct
 
 ```bash
 npm run build            # tsc -> dist/
+npm run typecheck        # tsc --noEmit over src/ + test/
 npm test                 # unit + integration (scripted provider, no network, no cost)
-node dist/cli.js validate                    # preflight: resolve every agent's model + auth
-node dist/cli.js run pipelines/paper.yaml --workspace examples/demo-paper
-node dist/cli.js resume <runId>
-node dist/cli.js status <runId>
-node dist/cli.js cost <runId>
+
+# The bin is `scholarly` (dist/cli/main.js); run it directly during development:
+node dist/cli/main.js validate               # preflight: resolve every agent's model + auth
+node dist/cli/main.js run pipelines/paper.yaml --workspace examples/demo-paper
+node dist/cli/main.js resume <runId>
+node dist/cli/main.js status <runId>
+node dist/cli/main.js report <runId>
 ```
+
+`src/runtime/sdk-probe.ts` is a deliberate compile-time drift detector: it imports every SDK
+symbol the orchestrator relies on, so `npm run typecheck` fails loudly if an upstream release
+changes their shape. Keep it in the build, not the test tree.
 
 ## Language
 
