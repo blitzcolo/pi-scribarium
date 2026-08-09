@@ -139,19 +139,41 @@ places; where they disagree, the types and compiled source win.
     fresh `createAgentSession()` per stage is simpler and sufficient; adopting it would force us to
     own re-subscription and extension rebinding for no gain.
 
+16. **`abort()` is cooperative, so the turn budget is a bound, not an exact ceiling.** A turn already
+    in flight still completes after `abort()`, so an aborted stage can report `maxTurns + 1` turns.
+    Assert ranges, not exact counts.
+17. **`registerProvider` requires `baseUrl` whenever a provider defines custom models** — even when
+    `streamSimple` means the URL is never contacted. Omitting it fails with
+    *"baseUrl is required when defining custom models"*. The test harness passes an unroutable
+    placeholder so a test that accidentally bypasses `streamSimple` fails on connection refused
+    instead of reaching a real API.
+
 ### Environment
 
-16. **pi's `read` tool cannot read PDFs.** It handles images (mime → `processImage`), but there is
+18. **pi's `read` tool cannot read PDFs.** It handles images (mime → `processImage`), but there is
     no PDF path. The `ingest` stage extracts text with `unpdf` first.
-17. **Built-in tools are NOT sandboxed to `cwd`.** Relative paths resolve against `cwd`, but
+19. **Built-in tools are NOT sandboxed to `cwd`.** Relative paths resolve against `cwd`, but
     absolute paths pass straight through, and `bash` is a full shell. The tool allowlist is the
     only containment: writing agents get `read, write, grep, find, ls` and never `bash` unless a
     pipeline explicitly opts in.
-18. **Auto-compaction can silently eat the source material** mid-analysis. Analysis agents that must
+20. **Auto-compaction can silently eat the source material** mid-analysis. Analysis agents that must
     hold a whole paper in context set `compaction: false`, and `compaction_start` is surfaced as a
     warning in the run report.
-19. **Auto-retry hides rate limiting.** pi retries transparently, so a 429 storm looks like slowness.
+21. **Auto-retry hides rate limiting.** pi retries transparently, so a 429 storm looks like slowness.
     Count `auto_retry_start` events and report them per stage.
 
 Pin `~0.84.1`. pi ships fast and has renamed packages before; `test/sdk-drift.test.ts` asserts these
 APIs still exist. Keep all SDK contact inside `src/runtime/**` so a breaking change touches few files.
+
+## Testing
+
+`test/helpers/scripted-provider.ts` is the seam the whole suite rests on. It registers an
+in-process provider whose `streamSimple` callback replaces **only** the network call, so the agent
+loop, the real built-in tools writing real files, session persistence, usage/cost accounting, the
+turn budget, retries, and compaction all run for real — with no network, no credentials, and no
+cost. Script one `ScriptStep` per assistant turn (`text`, `toolCalls`, `error`, `usage`); the
+harness records every system prompt, tool list, and user message the model was actually sent, which
+is what makes hermeticity and allowlist assertions possible.
+
+Prefer adding to this harness over mocking our own modules: a test that stubs `runStage` proves
+nothing about the SDK behaviours listed above, and those are where the bugs have actually been.
