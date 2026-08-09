@@ -25,8 +25,8 @@ export function commandInit(target: string, force: boolean): number {
 		fs.mkdirSync(path.join(root, dir), { recursive: true });
 	}
 
-	writeIfAbsent(path.join(root, "corpus", "README.md"), CORPUS_README, force);
-	writeIfAbsent(path.join(root, "source", "README.md"), SOURCE_README, force);
+	writeIfAbsent(path.join(root, "corpus", "_README.md"), CORPUS_README, force);
+	writeIfAbsent(path.join(root, "source", "_README.md"), SOURCE_README, force);
 	writeIfAbsent(path.join(root, "README.md"), workspaceReadme(path.basename(root)), force);
 
 	const shippedPipeline = path.join(shippedAgentsDir(), "..", "pipelines", "paper.yaml");

@@ -8,6 +8,7 @@ import { AgentRegistry } from "../agents/registry.js";
 import { commandEvents, commandReport, commandStatus } from "./commands/inspect.js";
 import { commandRun } from "./commands/run.js";
 import { commandInit } from "./commands/init.js";
+import { commandRedo } from "./commands/redo.js";
 import { commandDecide, commandResume } from "./commands/resume.js";
 import { collectCorpusInputs, ingestCorpus } from "../ingest/pdf.js";
 import { readRunDefaults } from "../runtime/defaults.js";
@@ -25,6 +26,7 @@ Commands:
   init <dir>                Scaffold a workspace for one paper
   run [pipeline]            Run a pipeline end to end
   resume [runId]            Continue a run that stopped at a gate or a failure
+  redo <step> [runId]       Re-open a finished step (and everything after it)
   approve [runId] [step]    Approve a pending gate
   reject  [runId] [step]    Reject a gate and regenerate (-m "what to change")
   status [runId]            Where a run got to (defaults to the latest run)
@@ -47,6 +49,9 @@ run / resume options:
   --quiet                   Do not print per-tool progress
   --gate-mode <mode>        file | interactive (default: interactive on a TTY)
   --force-pipeline          (resume) adopt an edited pipeline for remaining steps
+
+redo options:
+  -m, --message <text>      Feedback folded into the re-opened step's prompt
 
 reject options:
   -m, --message <text>      Feedback folded into the regenerated step's prompt
@@ -114,6 +119,20 @@ async function main(argv: readonly string[]): Promise<number> {
 				...(gateMode !== undefined ? { gateMode } : {}),
 				...(runId !== undefined ? { runId } : {}),
 				...(modelOverride !== undefined ? { modelOverride } : {}),
+			});
+		}
+		case "redo": {
+			const { workspace, agentDir } = resolveContext(args);
+			const stepId = args.positionals[0];
+			if (stepId === undefined) throw new UsageError("redo requires a step id.");
+			const runId = args.positionals[1];
+			const feedback = flagString(args, "message", "m");
+			return commandRedo({
+				workspace,
+				agentDir,
+				stepId,
+				...(runId !== undefined ? { runId } : {}),
+				...(feedback !== undefined ? { feedback } : {}),
 			});
 		}
 		case "approve":

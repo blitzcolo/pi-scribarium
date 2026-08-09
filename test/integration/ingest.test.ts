@@ -196,3 +196,19 @@ describe("LaTeX sources", () => {
 		expect(collectCorpusInputs([corpus]).map((p) => path.basename(p))).toContain("a.tex");
 	});
 });
+
+describe("non-document files", () => {
+	// `scholarly init` drops guidance into corpus/, and ingesting it silently
+	// contaminated the journal profile with the tool's own documentation.
+	it.each(["README.md", "readme.md", "_README.md", ".notes.md"])(
+		"does not treat %s as a corpus document",
+		(name) => {
+			fs.writeFileSync(path.join(corpus, name), "guidance, not a paper");
+			fs.writeFileSync(path.join(corpus, "real-paper.md"), "an actual paper");
+
+			expect(collectCorpusInputs([corpus]).map((p) => path.basename(p))).toEqual([
+				"real-paper.md",
+			]);
+		},
+	);
+});

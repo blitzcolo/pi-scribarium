@@ -47,6 +47,17 @@ export interface IngestOptions {
 // than stripping.
 const TEXT_EXTENSIONS = new Set([".md", ".txt", ".markdown", ".tex"]);
 
+/**
+ * Files that live in a corpus directory but are not corpus documents.
+ *
+ * `scholarly init` drops guidance files into corpus/ and source/, and without
+ * this they are ingested and analysed as if they were papers from the target
+ * journal — quietly contaminating the profile the whole pipeline is built on.
+ */
+function isNotADocument(name: string): boolean {
+	return name.startsWith(".") || name.startsWith("_") || /^readme\.[a-z]+$/i.test(name);
+}
+
 /** Filesystem-safe, stable identifier derived from a file name. */
 export function slugify(filePath: string): string {
 	const base = path.basename(filePath, path.extname(filePath));
@@ -236,6 +247,7 @@ export function collectCorpusInputs(paths: readonly string[]): string[] {
 		if (stats.isDirectory()) {
 			for (const child of fs.readdirSync(entry, { withFileTypes: true })) {
 				if (!child.isFile()) continue;
+				if (isNotADocument(child.name)) continue;
 				const extension = path.extname(child.name).toLowerCase();
 				if (extension === ".pdf" || TEXT_EXTENSIONS.has(extension)) {
 					found.push(path.join(entry, child.name));
