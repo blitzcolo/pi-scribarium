@@ -82,48 +82,56 @@ places; where they disagree, the types and compiled source win.
 5. **`DefaultResourceLoader` requires `cwd` and `agentDir`.** The SDK's own `docs/sdk.md` shows a
    form that does not typecheck; `examples/sdk/03-custom-prompt.ts` is correct. Always
    `await loader.reload()` before use.
-6. **`modelRuntime.getModel(provider, id)` is synchronous** and returns `Model | undefined`.
+6. **Never import from `@earendil-works/pi-agent-core`, `/pi-ai`, or any other SDK sub-package.**
+   The SDK ships an `npm-shrinkwrap.json`, so its peers install *nested* under
+   `node_modules/@earendil-works/pi-coding-agent/node_modules/` and are **not resolvable from our
+   project root** (`MODULE_NOT_FOUND`). Import only from `@earendil-works/pi-coding-agent`. For
+   types it does not re-export (e.g. `ThinkingLevel`), either derive them
+   (`NonNullable<ReturnType<ModelRuntime["getModel"]>>`) or declare a local union that matches —
+   `ThinkingLevel` is `"off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"`. If a test
+   genuinely needs `pi-ai`, add it as an explicit devDependency.
+7. **`modelRuntime.getModel(provider, id)` is synchronous** and returns `Model | undefined`.
    No `await`; always null-check. `resolveCliModel({ cliModel, modelRuntime })` is also synchronous
    and parses `"provider/model:thinking"` in one string — prefer it for user-supplied model refs.
    Do not import the free `getModel()`: the docs disagree on whether it comes from
    `@earendil-works/pi-ai` or `@earendil-works/pi-ai/compat`.
-7. **`tools: []` is honored as a real empty allowlist** — `sdk.js`:
+8. **`tools: []` is honored as a real empty allowlist** — `sdk.js`:
    `options.tools ?? (options.noTools === "all" ? [] : undefined)`. No need for the `noTools` dance.
    Built-in names: `read, bash, edit, write, grep, find, ls`. If `tools` is set it is a *strict*
    allowlist, so custom tools must be listed too.
-8. **Agent `tools` may be a comma string or a YAML array** — accept both. `parseFrontmatter` uses
+9. **Agent `tools` may be a comma string or a YAML array** — accept both. `parseFrontmatter` uses
    the real `yaml` package, so arrays, numbers, and booleans all parse natively; pi's own subagent
    example uses the comma-string form and `.split(",")`.
-9. **`session.abort()` is async** (aborts *and* waits for idle). Never `await` it inside an event
+10. **`session.abort()` is async** (aborts *and* waits for idle). Never `await` it inside an event
    listener — fire it with `void` and let the run settle. `await session.waitForIdle()` before
    `dispose()` so a persisted `.jsonl` is not truncated. Capture stats/text **before** `dispose()`.
-10. **Use `session.getSessionStats()` for tokens/cost** — it includes compacted-away history, so
+11. **Use `session.getSessionStats()` for tokens/cost** — it includes compacted-away history, so
     summing `msg.usage` by hand under-reports. But it is *not* context pressure: use
     `session.getContextUsage()` for that. Label report columns accordingly.
-11. **Use `session.getLastAssistantText()`** for stage handoff — but treat it as advisory. If the
+12. **Use `session.getLastAssistantText()`** for stage handoff — but treat it as advisory. If the
     agent's last act was a tool call it can be empty. The real contract is the declared `output:`
     path: stat it after a "successful" stage and downgrade to failed if missing.
-12. **`createAgentSession`'s JSDoc shows `continueSession: true` — not a real option.** Use
+13. **`createAgentSession`'s JSDoc shows `continueSession: true` — not a real option.** Use
     `SessionManager.continueRecent(cwd)`.
-13. **`thinkingLevel` defaults to `medium`**, not `off`. Valid: `off, minimal, low, medium, high,
+14. **`thinkingLevel` defaults to `medium`**, not `off`. Valid: `off, minimal, low, medium, high,
     xhigh, max`. Set it explicitly per agent.
-14. **`AgentSessionRuntime` is a deliberate non-goal.** It exists to *replace* a live session
+15. **`AgentSessionRuntime` is a deliberate non-goal.** It exists to *replace* a live session
     (new/switch/fork/import) for interactive UX. Our stages are hermetic and short-lived, so a
     fresh `createAgentSession()` per stage is simpler and sufficient; adopting it would force us to
     own re-subscription and extension rebinding for no gain.
 
 ### Environment
 
-15. **pi's `read` tool cannot read PDFs.** It handles images (mime → `processImage`), but there is
+16. **pi's `read` tool cannot read PDFs.** It handles images (mime → `processImage`), but there is
     no PDF path. The `ingest` stage extracts text with `unpdf` first.
-16. **Built-in tools are NOT sandboxed to `cwd`.** Relative paths resolve against `cwd`, but
+17. **Built-in tools are NOT sandboxed to `cwd`.** Relative paths resolve against `cwd`, but
     absolute paths pass straight through, and `bash` is a full shell. The tool allowlist is the
     only containment: writing agents get `read, write, grep, find, ls` and never `bash` unless a
     pipeline explicitly opts in.
-17. **Auto-compaction can silently eat the source material** mid-analysis. Analysis agents that must
+18. **Auto-compaction can silently eat the source material** mid-analysis. Analysis agents that must
     hold a whole paper in context set `compaction: false`, and `compaction_start` is surfaced as a
     warning in the run report.
-18. **Auto-retry hides rate limiting.** pi retries transparently, so a 429 storm looks like slowness.
+19. **Auto-retry hides rate limiting.** pi retries transparently, so a 429 storm looks like slowness.
     Count `auto_retry_start` events and report them per stage.
 
 Pin `~0.84.1`. pi ships fast and has renamed packages before; `test/sdk-drift.test.ts` asserts these
