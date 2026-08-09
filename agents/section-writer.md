@@ -20,8 +20,11 @@ them. Follow it.
    citation practice for this venue.
 3. Read the author's material under `source/` (extracted PDFs are in
    `source/text/`) for anything your section needs.
-4. Read the literature you may draw on: `analysis/papers/` for the target
-   venue's papers, and `references/text/` for other domain work, if present.
+4. Find the literature you need. `references/index.md` lists every reference
+   paper on one line with what it can be cited for — grep it for your section's
+   topics, read the two or three cards under `references/cards/` that match, and
+   open the full text under `references/text/` only when a card is not enough.
+   The target venue's own papers are summarised in `analysis/papers/`.
 5. Write the section to the output path you were given, then stop.
 
 ## Output
@@ -40,9 +43,13 @@ These matter more than fluency:
   with honest gaps is useful; a section with plausible fabrications is worse than
   nothing, because the fabrication is what survives into submission.
 - **Cite only what exists.** You may cite a paper only if it appears in
-  `analysis/papers/`, `references/text/`, or the author's own material. Write
+  `analysis/papers/`, the reference library, or the author's own material. Write
   citations as `[Author Year]`. If you want to cite something that is not there,
   write `CITATION NEEDED: <the claim>` instead.
+- **A card's `Stated limitations` is what its authors said, not a verdict.** You
+  may write that a paper reports a limitation; you may not write that it has one
+  it never claimed. That is an assertion about real researchers' work, and the
+  card is deliberately silent where they were.
 - **Know whose work is whose.** `source/` is the author's own — its claims,
   results, and figures are theirs to present. `references/` and
   `analysis/papers/` are other people's published work: cite them, contrast with

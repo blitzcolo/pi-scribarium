@@ -96,3 +96,51 @@ describe("ingest builtin", () => {
 		expect(result.summary).toContain(".pdf");
 	});
 });
+
+describe("build-index builtin", () => {
+	const indexStep = (options: Record<string, unknown> = {}): BuiltinStepSpec => ({
+		kind: "builtin",
+		id: "index-references",
+		run: "build-index",
+		with: options,
+		outputs: [],
+	});
+
+	it("writes an index of the cards it finds", async () => {
+		seed("references/cards", {
+			"a.md": "---\ntitle: Thermal Fusion\nyear: 2024\n---\n\n## Work\n\nX.\n",
+		});
+
+		const result = await runBuiltin(indexStep(), ctx());
+
+		expect(result.ok).toBe(true);
+		expect(result.summary).toContain("indexed 1 card(s)");
+		const index = fs.readFileSync(path.join(workspace, "references", "index.md"), "utf-8");
+		expect(index).toContain("Thermal Fusion");
+	});
+
+	// An empty library is normal, and a run must not fail because the author
+	// has no literature from outside their target venue.
+	it("writes an empty index rather than failing when there are no cards", async () => {
+		const result = await runBuiltin(indexStep(), ctx());
+
+		expect(result.ok).toBe(true);
+		expect(fs.readFileSync(path.join(workspace, "references", "index.md"), "utf-8")).toContain(
+			"0 paper(s)",
+		);
+	});
+
+	// Losing the index over one malformed card would be a worse trade than
+	// listing it: the paper is still in the library and still citable.
+	it("reports a malformed card without failing the step", async () => {
+		seed("references/cards", {
+			"good.md": "---\ntitle: Good\n---\n\nbody\n",
+			"bad.md": "---\ntitle: [unclosed\n---\n\nbody\n",
+		});
+
+		const result = await runBuiltin(indexStep(), ctx());
+
+		expect(result.ok).toBe(true);
+		expect(result.summary).toContain("1 unparseable");
+	});
+});

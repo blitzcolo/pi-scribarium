@@ -92,6 +92,14 @@ want to cite, build on, or argue against.
   directory: a paper from the wrong venue would distort the expected structure,
   length, and evidence bar that every later stage is written against.
 
+Each paper gets a short card in \`references/cards/\` — what it does, what its
+authors claim is new, what limitations they state, and what it can be cited for
+— collated into \`references/index.md\`. That index is how a writer finds
+anything once there are more than a handful of papers here.
+
+Cards are cached against the file's timestamp, so adding ten papers to a library
+of four hundred analyses ten. \`touch\` a file to force it to be re-read.
+
 Put a paper here when it is relevant to your topic but was not published where
 you are submitting. Put it in \`corpus/\` only if it was.
 `;
@@ -149,6 +157,8 @@ scribarium resume
 | \`corpus/text/\` | Extracted text, cached between runs |
 | \`references/text/\` | The same, for cited literature |
 | \`source/text/\` | The same, for your own PDFs |
+| \`references/cards/\` | One short summary card per reference paper |
+| \`references/index.md\` | Every reference on one line — grep this first |
 | \`analysis/papers/\` | One analysis per corpus paper |
 | \`analysis/journal-profile.md\` | What this venue expects |
 | \`outline/outline.md\` | The manuscript outline |

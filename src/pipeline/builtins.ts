@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 import { checkCitations, formatCitationReport, type CitationReport } from "../checks/citations.js";
+import { buildReferenceIndex } from "../checks/reference-index.js";
 import { collectCorpusInputs, ingestCorpus, parseExtensionFilter } from "../ingest/pdf.js";
 import type { BuiltinStepSpec } from "./schema.js";
 
@@ -37,7 +38,41 @@ export async function runBuiltin(
 			return assembleSections(step, ctx);
 		case "check-citations":
 			return runCitationCheck(step, ctx);
+		case "build-index":
+			return runBuildIndex(step, ctx);
 	}
+}
+
+/**
+ * Collate the reference cards into one scannable index.
+ *
+ * Deterministic: distilling a paper is judgement work and costs a model call
+ * per card, but collating what those calls already produced is not, and paying
+ * to re-read several hundred cards every run would cost more than writing them.
+ */
+function runBuildIndex(step: BuiltinStepSpec, ctx: BuiltinContext): BuiltinResult {
+	const from = typeof step.with["from"] === "string" ? step.with["from"] : "references/cards";
+	const out = typeof step.with["out"] === "string" ? step.with["out"] : "references/index.md";
+
+	const report = buildReferenceIndex({ workspace: ctx.workspace, from });
+
+	const target = path.resolve(ctx.workspace, out);
+	fs.mkdirSync(path.dirname(target), { recursive: true });
+	fs.writeFileSync(target, report.markdown, "utf-8");
+
+	// An unreadable card is reported but does not fail the step: the paper is
+	// still in the library and still citable, and losing the index over one
+	// malformed file would be a worse trade than listing it as needing attention.
+	const notes: string[] = [];
+	if (report.unreadable.length > 0) notes.push(`${report.unreadable.length} unparseable`);
+	if (report.untitled.length > 0) notes.push(`${report.untitled.length} untitled`);
+
+	return {
+		ok: true,
+		summary:
+			`indexed ${report.cards.length} card(s) into ${out}` +
+			(notes.length > 0 ? ` (${notes.join(", ")})` : ""),
+	};
 }
 
 /**

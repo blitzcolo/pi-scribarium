@@ -216,3 +216,117 @@ describe("fan-out accounting", () => {
 		expect(final.steps["analyze"]?.turns).toBe(8);
 	});
 });
+
+/**
+ * A per-paper summary is a property of the paper, not of the run. Without a
+ * cache, a library of several hundred references is re-analysed — and re-paid
+ * for — every single run, which at that size costs more than every other step
+ * combined.
+ */
+describe("fan-out caching", () => {
+	const CACHED = `
+steps:
+  - id: analyze
+    agent: analyst
+    foreach: "corpus/text/*.md"
+    parallel: 4
+    cache: true
+    input: Analyse \${item.path}.
+    output: analysis/\${item.id}.md
+`;
+
+	/** An output already on disk, newer than its source. */
+	function seedOutput(id: string, body = "# cached\n"): void {
+		const target = path.join(workspace, "analysis", `${id}.md`);
+		fs.mkdirSync(path.dirname(target), { recursive: true });
+		fs.writeFileSync(target, body);
+		const later = new Date(Date.now() + 10_000);
+		fs.utimesSync(target, later, later);
+	}
+
+	it("does not re-run an item whose output is newer than its source", async () => {
+		seedCorpus(3);
+		seedOutput("paper-02", "# preserved\n");
+
+		const { final, scripted } = await execute(CACHED, analystScript());
+
+		expect(final.steps["analyze"]?.status).toBe("completed");
+		// Two items ran, each taking two turns; the cached one was never sent.
+		expect(scripted.requests.every((r) => !r.lastUserText.includes("paper-02"))).toBe(true);
+		expect(final.steps["analyze"]?.turns).toBe(4);
+		// The existing artifact is left exactly as it was.
+		expect(fs.readFileSync(path.join(workspace, "analysis", "paper-02.md"), "utf-8")).toBe(
+			"# preserved\n",
+		);
+	});
+
+	it("still lists a cached item's outputs for the reducer downstream", async () => {
+		seedCorpus(3);
+		seedOutput("paper-02");
+
+		const { final } = await execute(CACHED, analystScript());
+
+		expect(final.steps["analyze"]?.outputs).toHaveLength(3);
+		expect(final.steps["analyze"]?.items?.["paper-02"]?.status).toBe("completed");
+	});
+
+	it("re-runs an item whose source is newer than its output", async () => {
+		seedCorpus(2);
+		const stale = path.join(workspace, "analysis", "paper-01.md");
+		fs.mkdirSync(path.dirname(stale), { recursive: true });
+		fs.writeFileSync(stale, "# stale\n");
+		const earlier = new Date(Date.now() - 60_000);
+		fs.utimesSync(stale, earlier, earlier);
+
+		const { final, scripted } = await execute(CACHED, analystScript());
+
+		expect(scripted.requests.some((r) => r.lastUserText.includes("paper-01"))).toBe(true);
+		expect(final.steps["analyze"]?.turns).toBe(4);
+	});
+
+	it("runs everything when the step does not opt in", async () => {
+		seedCorpus(2);
+		seedOutput("paper-01");
+
+		const { final } = await execute(PIPELINE(), analystScript());
+
+		expect(final.steps["analyze"]?.turns).toBe(4);
+	});
+
+	it("reports how many items were cached", async () => {
+		seedCorpus(2);
+		seedOutput("paper-01");
+
+		const { events } = await execute(CACHED, analystScript());
+
+		const logs = events.filter((e) => e.type === "log").map((e) => e.message);
+		expect(logs.some((m) => m.includes("1 item(s) cached"))).toBe(true);
+	});
+});
+
+describe("optional fan-out", () => {
+	const OPTIONAL = `
+steps:
+  - id: analyze
+    agent: analyst
+    foreach: "references/text/*.md"
+    optional: true
+    input: Analyse \${item.path}.
+    output: analysis/\${item.id}.md
+`;
+
+	// references/ is legitimately empty for plenty of authors, so an empty
+	// fan-out there is a skipped step rather than a failed run.
+	it("skips rather than fails when nothing matches", async () => {
+		const { final } = await execute(OPTIONAL, analystScript());
+
+		expect(final.status).toBe("completed");
+		expect(final.steps["analyze"]?.status).toBe("skipped");
+	});
+
+	it("still fails an empty fan-out that did not opt in", async () => {
+		const { final } = await execute(PIPELINE(), analystScript());
+
+		expect(final.steps["analyze"]?.status).toBe("failed");
+	});
+});

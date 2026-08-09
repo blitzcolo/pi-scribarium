@@ -174,7 +174,9 @@ export async function runPipeline(options: RunPipelineOptions): Promise<RunState
 			...(stepState.error !== undefined ? { error: stepState.error.message } : {}),
 		});
 
-		if (stepState.status !== "completed") {
+		// "skipped" is a deliberate outcome, not a failure: an optional fan-out
+		// over an empty directory did the only correct thing available to it.
+		if (stepState.status !== "completed" && stepState.status !== "skipped") {
 			state.status = stepState.error?.code === "EXTERNAL_ABORT" ? "aborted" : "failed";
 			store.save(state);
 			log.append("run_end", { status: state.status });
@@ -349,6 +351,51 @@ function baseScope(
  * Run one agent stage and record it. Shared by plain agent steps and by each
  * item of a fan-out, so both get the same output contract and failure handling.
  */
+/**
+ * The outputs of an item that does not need re-running, or null.
+ *
+ * A per-paper summary is a property of the paper, not of the run that produced
+ * it: re-analysing an unchanged file buys an identical artifact at full price.
+ * At a few dozen items that is an annoyance; at several hundred it is the
+ * difference between a cache miss costing minutes and costing the whole run.
+ *
+ * The test is the one `ingest` already uses — every declared output exists and
+ * is at least as new as the source. Deliberately mtime rather than a content
+ * hash: `touch` is then the documented way to force a rebuild, and a corpus
+ * lives on a filesystem, not in a build system.
+ */
+function cachedOutputs(
+	step: ForeachStepSpec,
+	item: ForeachItem,
+	options: RunPipelineOptions,
+	state: RunState,
+): string[] | null {
+	if (step.cache !== true || item.path === undefined) return null;
+
+	// Feedback means a human asked for this step to be done again. Honouring a
+	// cache then would silently discard their words.
+	if (state.steps[step.id]?.pendingFeedback !== undefined) return null;
+
+	const { layout } = options;
+	let sourceMtime: number;
+	try {
+		sourceMtime = fs.statSync(path.resolve(layout.workspace, item.path)).mtimeMs;
+	} catch {
+		return null;
+	}
+
+	const scope = baseScope(options, state, item);
+	const outputs = step.outputs.map((template) => interpolate(template, scope));
+	for (const output of outputs) {
+		try {
+			if (fs.statSync(layout.artifact(output)).mtimeMs < sourceMtime) return null;
+		} catch {
+			return null;
+		}
+	}
+	return outputs;
+}
+
 async function runOneStage(
 	step: AgentStepSpec | ForeachStepSpec,
 	options: RunPipelineOptions,
@@ -482,6 +529,11 @@ async function executeForeach(
 	stepState.items = { ...previous };
 
 	if (items.length === 0) {
+		if (step.optional === true) {
+			stepState.status = "skipped";
+			options.onEvent?.({ type: "log", message: `      no items; skipping ${step.id}` });
+			return;
+		}
 		stepState.status = "failed";
 		stepState.error = { code: "BUILTIN_ERROR", message: "fan-out matched no items" };
 		return;
@@ -494,14 +546,31 @@ async function executeForeach(
 		concurrency: Math.min(step.concurrency, items.length),
 	});
 
-	// Only what is not already done. Usage counts this attempt alone: totals from
-	// earlier attempts are already in the persisted run total.
-	const pending = items.filter((item) => previous[item.id]?.status !== "completed");
-	const carried = items.length - pending.length;
+	// Two reasons to skip an item, and they are worth distinguishing in the log.
+	// `carried` is resume: this run already did it. `cached` is cross-run: the
+	// output on disk is newer than the source, so re-running would buy an
+	// identical file at full price.
+	let carried = 0;
+	let cached = 0;
+	const pending: ForeachItem[] = [];
+
+	for (const item of items) {
+		if (previous[item.id]?.status === "completed") {
+			carried++;
+			continue;
+		}
+		const fresh = cachedOutputs(step, item, options, state);
+		if (fresh !== null) {
+			cached++;
+			(stepState.items ??= {})[item.id] = { status: "completed", outputs: fresh };
+			continue;
+		}
+		pending.push(item);
+	}
 
 	let usage = emptyUsage();
 	let turns = 0;
-	let completed = carried;
+	let completed = carried + cached;
 	let failed = 0;
 
 	if (carried > 0) {
@@ -509,6 +578,13 @@ async function executeForeach(
 			type: "log",
 			message: `      ${carried} item(s) already complete, skipping`,
 		});
+	}
+	if (cached > 0) {
+		options.onEvent?.({
+			type: "log",
+			message: `      ${cached} item(s) cached (output newer than source), skipping`,
+		});
+		store.save(state);
 	}
 
 	const settled = await mapPool(

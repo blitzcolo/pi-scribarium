@@ -72,6 +72,32 @@ steps:
       Analyse the paper at ${item.path}.
     output: analysis/papers/${item.id}.md
 
+  # The reference library. A second map, but over a different question: not
+  # "what does this venue expect" — these papers were published elsewhere — but
+  # "what is in here, and what can each paper be cited for".
+  #
+  # `cache: true` because a card is a property of the paper, not of the run. At
+  # several hundred references, re-analysing an unchanged library every run
+  # would cost more than every other step combined.
+  - id: analyze-references
+    agent: reference-analyst
+    model: ${vars.bulk}
+    foreach: "references/text/*.md"
+    parallel: 4
+    cache: true
+    optional: true
+    input: |
+      Summarise the paper at ${item.path} as one card.
+    output: references/cards/${item.id}.md
+
+  # Deterministic: collating cards needs no judgement, and paying a model to
+  # re-read several hundred of them every run would cost more than writing them.
+  - id: index-references
+    builtin: build-index
+    with:
+      from: references/cards
+      out: references/index.md
+
   # The reduce half. Reads only the per-paper analyses, never the papers.
   - id: profile
     agent: journal-profiler
@@ -101,9 +127,11 @@ steps:
       source/text/) — read all of it first. It is the only place the author's
       own claims and results come from.
 
-      Domain literature the author may cite is under references/text/, if
-      present. It is other people's published work: cite it, never attribute it
-      to the author.
+      Domain literature the author may cite is catalogued in
+      references/index.md, one line per paper. Read the index, then the few
+      cards under references/cards/ that look relevant, and only then the full
+      text under references/text/. It is other people's published work: cite it,
+      never attribute it to the author.
 
       Produce the outline and the machine-readable section list.
 
@@ -135,7 +163,8 @@ steps:
       Outline:         outline/outline.md
       Journal profile: analysis/journal-profile.md
       Author material: source/ (extracted PDFs in source/text/)
-      Literature:      references/text/ and analysis/papers/
+      Literature:      references/index.md — scan it, then read only the cards
+                       and full texts you actually need. Also analysis/papers/.
 
       Language: ${vars.language}
     output: draft/${item.id}.md
@@ -177,5 +206,5 @@ steps:
     builtin: check-citations
     with:
       manuscript: final/paper.md
-      sources: [corpus/text, references/text, analysis/papers, source]
+      sources: [corpus/text, references/text, references/cards, analysis/papers, source]
       out: review/citations.md

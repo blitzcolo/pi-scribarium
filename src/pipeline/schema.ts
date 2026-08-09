@@ -39,7 +39,7 @@ export interface AgentStepSpec {
 	timeoutMs?: number;
 }
 
-export type BuiltinName = "ingest" | "assemble" | "check-citations";
+export type BuiltinName = "ingest" | "assemble" | "check-citations" | "build-index";
 
 export interface BuiltinStepSpec {
 	kind: "builtin";
@@ -71,6 +71,16 @@ export interface ForeachStepSpec {
 	concurrency: number;
 	/** Stop scheduling after this many item failures. Unset means isolate all. */
 	maxFailures?: number;
+	/**
+	 * Skip an item whose outputs already exist and are newer than its source.
+	 *
+	 * For fan-outs whose product is a property of the input file rather than of
+	 * a run — a summary of a paper that has not changed is the same summary.
+	 * Requires a glob source, since only those items carry a source path.
+	 */
+	cache?: boolean;
+	/** Matching no items is a skipped step rather than a failure. */
+	optional?: boolean;
 }
 
 export interface GateStepSpec {
@@ -105,4 +115,9 @@ export interface PipelineSpec {
 	filePath: string;
 }
 
-export const BUILTIN_NAMES: readonly BuiltinName[] = ["ingest", "assemble", "check-citations"];
+export const BUILTIN_NAMES: readonly BuiltinName[] = [
+	"ingest",
+	"assemble",
+	"check-citations",
+	"build-index",
+];

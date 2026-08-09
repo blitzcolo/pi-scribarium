@@ -19,9 +19,10 @@ ingest ─▶ analyze ─▶ profile ─▶ outline ─▶ [approve] ─▶ writ
                           code                       you
 ```
 
-Only `corpus/` reaches `profile`. `references/` and `source/` join at `outline`,
-so literature you cite and results you report cannot distort what the tool
-believes your target venue expects.
+Only `corpus/` reaches `profile`. `references/` gets its own map — one summary
+card per paper, collated into a searchable index — and joins at `outline`
+alongside `source/`, so literature you cite and results you report cannot
+distort what the tool believes your target venue expects.
 
 Each stage runs as an **isolated agent session**. Stages share nothing but files
 on disk, so a thirty-paper corpus never has to fit in one context window, and one
@@ -88,6 +89,32 @@ them yields an outline that fits none of them.
 Work that is relevant but published elsewhere goes in `references/`. It is
 extracted, readable by the writing agents, and indexed by the citation checker —
 so you can cite it and it will verify — but the profiler never sees it.
+
+### A reference library of any size
+
+Each reference paper gets a short card: what it does, what its authors claim is
+new, what limitations they state, and one clause saying what it can be cited
+for. A deterministic pass then collates the cards into `references/index.md`.
+
+That gives three tiers, each an order of magnitude smaller than the last, which
+is what makes several hundred papers usable at all:
+
+| | 400 papers |
+|---|---|
+| `references/text/` full text | ~2.4M tokens |
+| `references/cards/` one card each | ~90k tokens |
+| `references/index.md` one line each | **~19k tokens** |
+
+A writing agent greps the index, opens the two or three cards that match, and
+reads a full paper only when a card is not enough.
+
+Cards are **cached against the source file's mtime**. Adding ten papers to a
+library of four hundred analyses ten papers, not four hundred — the summary of a
+paper that has not changed is the same summary. `touch` a file to force a
+rebuild.
+
+Card cost scales with the library, once: at 400 papers on a cheap `bulk` model
+it is well under a dollar and about an hour, and every later run is free.
 
 PDFs in all three directories are extracted to a `text/` subdirectory, because
 the agents cannot read PDF bytes. In `source/` only PDFs are extracted; files
@@ -226,6 +253,8 @@ steps:
     foreach: "corpus/text/*.md"         # or {json: file, path: sections}
     parallel: 4                         # capped at 8
     max_failures: 5                     # optional; omit to isolate every failure
+    cache: true                         # skip items whose output outlives its source
+    optional: true                      # matching nothing skips instead of failing
     input: Analyse ${item.path}.
     output: analysis/papers/${item.id}.md   # must reference ${item.*}
 

@@ -35,6 +35,8 @@ const KNOWN_STEP_KEYS = new Set([
 	"foreach",
 	"parallel",
 	"max_failures",
+	"cache",
+	"optional",
 	"gate",
 	"show",
 	"on_reject",
@@ -231,6 +233,18 @@ function readStep(
 			);
 		}
 		const maxFailures = optionalInteger(step["max_failures"], ["steps", index, "max_failures"], ctx);
+		const cache = optionalBoolean(step["cache"], ["steps", index, "cache"], ctx) ?? false;
+		const optional = optionalBoolean(step["optional"], ["steps", index, "optional"], ctx) ?? false;
+
+		// Caching compares each output against its source file's mtime, and only
+		// glob items carry a source path. Refusing here beats a `cache: true`
+		// that silently never caches anything.
+		if (cache && source.kind !== "glob") {
+			throw new PipelineError(
+				`${ctx.at(["steps", index, "cache"])}: cache requires a glob foreach, ` +
+					`because only file-backed items have a source to compare against`,
+			);
+		}
 
 		// Without an ${item.*} reference every item writes the same path, and N
 		// concurrent sessions race on one file — silently, with the last writer
@@ -256,6 +270,8 @@ function readStep(
 			...(maxTurns !== undefined ? { maxTurns } : {}),
 			...(timeoutMs !== undefined ? { timeoutMs } : {}),
 			...(maxFailures !== undefined ? { maxFailures } : {}),
+			...(cache ? { cache } : {}),
+			...(optional ? { optional } : {}),
 		};
 		return foreachStep;
 	}
@@ -445,6 +461,14 @@ function optionalInteger(value: unknown, at: Path, ctx: Context): number | undef
 	if (value === undefined || value === null) return undefined;
 	if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
 		throw new PipelineError(`${ctx.at(at)}: expected a positive whole number`);
+	}
+	return value;
+}
+
+function optionalBoolean(value: unknown, at: Path, ctx: Context): boolean | undefined {
+	if (value === undefined || value === null) return undefined;
+	if (typeof value !== "boolean") {
+		throw new PipelineError(`${ctx.at(at)}: expected true or false`);
 	}
 	return value;
 }

@@ -89,6 +89,36 @@ describe("the shipped pipeline", () => {
 		expect(order.indexOf("analyze")).toBeLessThan(order.indexOf("profile"));
 		expect(order.indexOf("profile")).toBeLessThan(order.indexOf("outline"));
 	});
+
+	// A reference card is a property of the paper, not of the run. Without the
+	// cache a library of several hundred is re-analysed every run, which at that
+	// size costs more than every other step combined.
+	it("caches the reference fan-out and tolerates an empty library", () => {
+		const step = spec.steps.find((s) => s.id === "analyze-references");
+		expect(step?.kind).toBe("foreach");
+		if (step?.kind !== "foreach") throw new Error("analyze-references must be a fan-out");
+
+		expect(step.cache).toBe(true);
+		expect(step.optional).toBe(true);
+		expect(step.source).toMatchObject({ kind: "glob" });
+	});
+
+	it("indexes the cards before anything needs to read them", () => {
+		const order = spec.steps.map((s) => s.id);
+		expect(order.indexOf("analyze-references")).toBeLessThan(order.indexOf("index-references"));
+		expect(order.indexOf("index-references")).toBeLessThan(order.indexOf("outline"));
+	});
+
+	// The reference library must reach the writer without reaching the profiler.
+	it("routes the reference index to the writing stages only", () => {
+		const write = spec.steps.find((s) => s.id === "write");
+		if (write?.kind !== "foreach") throw new Error("write must be a fan-out");
+		expect(write.input).toContain("references/index.md");
+
+		const profile = spec.steps.find((s) => s.id === "profile");
+		if (profile?.kind !== "agent") throw new Error("profile must be an agent step");
+		expect(profile.input).not.toContain("references");
+	});
 });
 
 describe("scribarium init", () => {

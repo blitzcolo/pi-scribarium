@@ -229,6 +229,29 @@ load-bearing, not organisational:
   LaTeX are already readable in place, and copying them would show a writer the same material at
   two paths. `references/` and `source/` are `optional: true`; an empty `corpus/` is still fatal.
 
+### The reference library
+
+`references/` has its own map-reduce, aimed at a different question from `corpus/`'s: not what the
+venue expects, but what is in the library and what each paper can be cited for.
+
+- **Three tiers, each ~10x smaller**: full text (~2.4M tokens at 400 papers) → one card each
+  (~90k) → `references/index.md`, one line each (~19k). Only the last fits comfortably alongside
+  everything else a writer holds, which is why the index exists and why card length is capped at
+  150-250 words. A card nobody can scan costs the same to produce and gets skipped.
+- **`build-index` is a builtin, not an agent.** Distilling a paper is judgement; collating what
+  those calls already produced is not, and re-reading several hundred cards per run would cost more
+  than writing them did.
+- **Cards are cached on mtime** (`cache: true`), because a card is a property of the paper, not of
+  the run. Without it, several hundred references are re-paid for every run — more than every other
+  step combined. mtime rather than a content hash so `touch` is the documented rebuild.
+- **`Stated limitations` records only what the authors wrote**, and `not stated` otherwise. What
+  goes there may be cited as fact about someone's published work; "this method fails when X" is an
+  assertion about real researchers, so the analyst is forbidden from inferring it and the writer
+  from upgrading it. Judging the work is the reviewer's job, against full text.
+- **`tags` are a search aid, not a taxonomy.** Each card is written by a session that has seen one
+  paper and cannot know the others' vocabulary, so the keyword section is capped per tag and the
+  table remains the thing to grep.
+
 ## Fan-out
 
 `foreach` runs one agent per item in its own session — the map half of the
@@ -248,7 +271,15 @@ for.
 - `status.json` is rewritten as each item settles, so a kill costs at most the
   work still in flight.
 - Item ids come from the filename stem (glob) or an `id` field (json/items) and
-  must be stable across runs, or resume could not tell which items are done.
+  must be stable across runs, or resume could not tell which items are done —
+  and `cache: true` could not match an output to its source either.
+- `cache: true` skips an item whose declared outputs all exist and are at least
+  as new as its source file, the same test `ingest` uses. Glob sources only:
+  json/items have no source to compare against, and a `cache` that silently
+  never caches is worse than a load-time error. Pending gate feedback disables
+  it — a human asking for the step again must not be served from cache.
+- `optional: true` turns "matched no items" into a skipped step. A skipped step
+  does not fail the run; it is a deliberate outcome, not an error.
 
 ## Gates, resume, and regeneration
 
