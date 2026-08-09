@@ -61,6 +61,30 @@ describe("ingestCorpus", () => {
 		expect(written.indexOf("BETA_PAGE")).toBeLessThan(written.indexOf("GAMMA_PAGE"));
 	});
 
+	// Guards a fixture flaw that made extraction look lossy: a single over-wide
+	// Tj line runs past the MediaBox and pdf.js drops the overflowing glyphs.
+	// Real PDFs wrap their text, and so must the fixture — otherwise this suite
+	// would happily pass while every page silently lost most of its content.
+	it("round-trips a full page of prose without dropping text", async () => {
+		const sentences = Array.from(
+			{ length: 40 },
+			(_, i) => `Sentence ${i} states a distinct and clearly identifiable fact about the study.`,
+		);
+		const source = writePdf("long.pdf", [sentences.join(" ")]);
+
+		const result = await ingestCorpus({ inputs: [source], outDir });
+		const written = fs.readFileSync(result.files[0]?.outputPath ?? "", "utf-8");
+		// Line breaks fall wherever the page wrapped them; the claim under test is
+		// that no content was lost, not that layout was preserved.
+		const flattened = written.replace(/\s+/g, " ");
+
+		// Every sentence must survive, not merely the first screenful.
+		for (const index of [0, 13, 27, 39]) {
+			expect(flattened).toContain(`Sentence ${index} states`);
+		}
+		expect(result.files[0]?.characters ?? 0).toBeGreaterThan(2500);
+	});
+
 	it("passes existing text documents through unchanged", async () => {
 		const source = path.join(corpus, "notes.md");
 		fs.writeFileSync(source, "# Already text\n\nBODY_MARKER\n");

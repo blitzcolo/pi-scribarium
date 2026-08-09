@@ -6,6 +6,7 @@ import { getAgentDir, ModelRuntime } from "@earendil-works/pi-coding-agent";
 
 import { AgentRegistry } from "../agents/registry.js";
 import { collectCorpusInputs, ingestCorpus } from "../ingest/pdf.js";
+import { readRunDefaults } from "../runtime/defaults.js";
 import { preflightModels } from "../runtime/model.js";
 import { runStage } from "../runtime/run-stage.js";
 import { PreflightError, ScribariumError, UsageError } from "../util/errors.js";
@@ -26,6 +27,7 @@ Commands:
 Common options:
   --workspace <dir>         Workspace root (default: cwd)
   --agent-dir <dir>         pi config dir (default: ~/.pi/agent)
+  --model <provider/model>  Override the model for agents that do not pin one
 
 ingest options:
   --out <dir>               Output directory (default: <workspace>/corpus/text)
@@ -118,20 +120,24 @@ async function commandValidate(args: ParsedArgs): Promise<number> {
 	await preflightModels(modelRuntime, refs);
 	for (const ref of refs) process.stdout.write(`  ok  ${ref}\n`);
 
-	// Agents without a `model:` fall back to whatever model the session picks,
-	// so an empty ref list must not be mistaken for a working setup: with no
-	// credentials at all, every stage would fail at its first prompt.
+	// Agents without a `model:` resolve through the configured default, so an
+	// empty ref list must not be mistaken for a working setup: with no default
+	// and no credentials, every stage would fail at its first prompt.
+	const { workspace, agentDir } = resolveContext(args);
 	const pinnedAll = registry.list().every((agent) => agent.modelRef !== undefined);
 	if (!pinnedAll) {
-		const available = await modelRuntime.getAvailable();
-		if (available.length === 0) {
+		const fallback = flagString(args, "model", "m") ?? readRunDefaults(workspace, agentDir).modelRef;
+		if (fallback !== undefined) {
+			await preflightModels(modelRuntime, [fallback]);
+			process.stdout.write(`  ok  ${fallback} (default for unpinned agents)\n`);
+		} else if ((await modelRuntime.getAvailable()).length === 0) {
 			throw new PreflightError(
-				"No model is available. Some agents do not pin a `model:` and would fall back " +
-					"to the session default, but no provider has usable credentials.\n" +
-					"Run `pi auth login <provider>`, or set the provider's API key.",
+				"No model is available. Some agents do not pin a `model:`, no default is " +
+					"configured, and no provider has usable credentials.\n" +
+					"Run `pi auth login <provider>`, or set defaultProvider/defaultModel in " +
+					"~/.pi/agent/settings.json.",
 			);
 		}
-		process.stdout.write(`  ok  ${available.length} model(s) available for unpinned agents\n`);
 	}
 
 	process.stdout.write("All agents resolve to an available model.\n");
@@ -182,9 +188,13 @@ async function commandRunAgent(args: ParsedArgs): Promise<number> {
 	const agent = loadRegistry(args).get(name);
 	const task = await resolveTask(args, workspace);
 
+	const defaults = readRunDefaults(workspace, agentDir);
+	const overrideModel = flagString(args, "model", "m");
+	const modelRef = agent.modelRef ?? overrideModel ?? defaults.modelRef;
+
 	const modelRuntime = await ModelRuntime.create();
-	if (agent.modelRef !== undefined) {
-		await preflightModels(modelRuntime, [agent.modelRef]);
+	if (modelRef !== undefined) {
+		await preflightModels(modelRuntime, [modelRef]);
 	}
 
 	const sessionDir = flagString(args, "session-dir");
@@ -201,6 +211,8 @@ async function commandRunAgent(args: ParsedArgs): Promise<number> {
 			agentDir,
 			modelRuntime,
 			signal: controller.signal,
+			...(modelRef !== undefined ? { defaultModelRef: modelRef } : {}),
+			...(defaults.thinking !== undefined ? { defaultThinking: defaults.thinking } : {}),
 			...(sessionDir !== undefined ? { sessionDir: path.resolve(sessionDir) } : {}),
 			onEvent: (event) => {
 				if (event.type === "text" && !quiet) process.stdout.write(event.delta);

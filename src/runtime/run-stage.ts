@@ -49,6 +49,14 @@ export interface RunStageOptions {
 	/** pi's global config dir. Defaults to the SDK's `getAgentDir()`. */
 	agentDir: string;
 	modelRuntime: ModelRuntime;
+	/**
+	 * Model used when the agent does not pin one. Shipped agents deliberately
+	 * leave `model:` unset so the package is portable, so without this they would
+	 * fall back to whichever model happens to be listed first.
+	 */
+	defaultModelRef?: string;
+	/** Thinking level used when neither the agent nor the model reference sets one. */
+	defaultThinking?: ThinkingLevelName;
 	/** When set, the session transcript is persisted here as JSONL. */
 	sessionDir?: string;
 	outputLimitBytes?: number;
@@ -87,14 +95,16 @@ export async function runStage(options: RunStageOptions): Promise<RunStageResult
 	const startedAt = Date.now();
 	const { agent, modelRuntime, onEvent } = options;
 
-	const resolved = agent.modelRef !== undefined
-		? resolveStageModel(modelRuntime, agent.modelRef)
-		: undefined;
+	const modelRef = agent.modelRef ?? options.defaultModelRef;
+	const resolved = modelRef !== undefined ? resolveStageModel(modelRuntime, modelRef) : undefined;
 	if (resolved?.warning !== undefined) {
 		onEvent?.({ type: "warn", message: resolved.warning });
 	}
 
-	const thinkingLevel: ThinkingLevelName | undefined = agent.thinking ?? resolved?.thinkingLevel;
+	// Precedence: the agent's own setting, then a `:level` suffix on the model
+	// reference, then the run-wide default.
+	const thinkingLevel: ThinkingLevelName | undefined =
+		agent.thinking ?? resolved?.thinkingLevel ?? options.defaultThinking;
 
 	const resourceLoader = await createStageResourceLoader({
 		cwd: options.cwd,

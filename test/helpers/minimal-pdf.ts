@@ -28,7 +28,13 @@ export function minimalPdf(pageTexts: readonly string[]): Uint8Array {
 			"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] " +
 			`/Contents ${contentId} 0 R /Resources << /Font << /F1 3 0 R >> >> >>`;
 
-		const stream = `BT /F1 24 Tf 72 700 Td (${escapePdfText(text)}) Tj ET`;
+		// Text must be wrapped into lines. A single over-wide Tj runs past the
+		// MediaBox and pdf.js drops the overflowing glyphs, so a one-line fixture
+		// silently truncates at ~80 characters and makes extraction look lossy
+		// when it is not. Real PDFs always wrap; the fixture must too.
+		const lines = wrapText(text, 70);
+		const body = lines.map((line) => `(${escapePdfText(line)}) Tj T*`).join("\n");
+		const stream = `BT\n/F1 11 Tf\n14 TL\n72 720 Td\n${body}\nET`;
 		objects[contentId] = `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`;
 	});
 
@@ -54,6 +60,32 @@ export function minimalPdf(pageTexts: readonly string[]): Uint8Array {
 	chunks.push(`trailer\n<< /Size ${objectCount} /Root 1 0 R >>\nstartxref\n${position}\n%%EOF\n`);
 
 	return new Uint8Array(Buffer.from(chunks.join(""), "latin1"));
+}
+
+/** Greedy word wrap, splitting any single word longer than the limit. */
+function wrapText(text: string, limit: number): string[] {
+	const lines: string[] = [];
+	let current = "";
+
+	for (const word of text.split(/\s+/).filter((w) => w.length > 0)) {
+		let remaining = word;
+		while (remaining.length > limit) {
+			if (current.length > 0) {
+				lines.push(current);
+				current = "";
+			}
+			lines.push(remaining.slice(0, limit));
+			remaining = remaining.slice(limit);
+		}
+		if (current.length === 0) current = remaining;
+		else if (current.length + 1 + remaining.length <= limit) current += ` ${remaining}`;
+		else {
+			lines.push(current);
+			current = remaining;
+		}
+	}
+	if (current.length > 0) lines.push(current);
+	return lines.length > 0 ? lines : [""];
 }
 
 function escapePdfText(text: string): string {

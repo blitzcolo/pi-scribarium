@@ -23,6 +23,25 @@ node dist/cli/main.js report <runId>
 symbol the orchestrator relies on, so `npm run typecheck` fails loudly if an upstream release
 changes their shape. Keep it in the build, not the test tree.
 
+## Models
+
+This machine is configured for a single model: **`kimi-coding/k3-256k`** (Anthropic Messages API
+at `https://api.kimi.com/coding`, 256k context, text + image, thinking `high`). pi ships
+`kimi-coding` as a built-in provider with that model already in its catalog, so no `models.json`
+entry is needed — only a credential.
+
+- Credential lives in `~/.pi/agent/auth.json` (`{"kimi-coding": {"type": "api_key", "key": "..."}}`,
+  mode 0600). Never commit it; `KIMI_API_KEY` also works as an env fallback.
+- Defaults are set in `~/.pi/agent/settings.json` (`defaultProvider`, `defaultModel`,
+  `defaultThinkingLevel`).
+- Shipped agents deliberately do **not** pin `model:`, so the package stays portable. Stages run
+  with an in-memory `SettingsManager` and therefore cannot pick up those defaults on their own —
+  `readRunDefaults()` reads them and passes them in explicitly. Removing that would silently fall
+  back to whichever model is listed first.
+- **`k3-256k` reports zero cost** in pi's catalog (it is a subscription model). `getSessionStats().cost`
+  will be `$0.0000`; token counts are still real. Cost reporting in M1 must not be read as
+  "the run was free" on this provider.
+
 ## Language
 
 All code, identifiers, comments, docs, and commit messages are in **English**.

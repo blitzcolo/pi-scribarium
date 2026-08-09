@@ -55,8 +55,32 @@ export function slugify(filePath: string): string {
 	return slug.length > 0 ? slug : "document";
 }
 
+/**
+ * pdf.js calls `Math.sumPrecise`, a TC39 proposal that Node does not yet
+ * implement. Without it every page logs "TypeError: Math.sumPrecise is not a
+ * function" and glyph positioning falls back to a less accurate path. Neumaier
+ * summation gives the compensated result the proposal specifies.
+ */
+function ensureSumPrecise(): void {
+	const math = Math as unknown as { sumPrecise?: (values: Iterable<number>) => number };
+	if (typeof math.sumPrecise === "function") return;
+
+	math.sumPrecise = (values: Iterable<number>): number => {
+		let sum = 0;
+		let compensation = 0;
+		for (const value of values) {
+			const next = sum + value;
+			compensation +=
+				Math.abs(sum) >= Math.abs(value) ? sum - next + value : value - next + sum;
+			sum = next;
+		}
+		return sum + compensation;
+	};
+}
+
 /** Extract per-page text from one PDF. */
 export async function extractPdfPages(pdfPath: string): Promise<string[]> {
+	ensureSumPrecise();
 	// Imported lazily: unpdf pulls in a pdf.js build, which is far too heavy to
 	// load for commands that never touch a PDF.
 	const { extractText } = await import("unpdf");
