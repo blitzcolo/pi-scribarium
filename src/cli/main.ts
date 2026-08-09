@@ -15,6 +15,7 @@ import { readRunDefaults } from "../runtime/defaults.js";
 import { preflightModels } from "../runtime/model.js";
 import { runStage } from "../runtime/run-stage.js";
 import { PreflightError, ScribariumError, UsageError } from "../util/errors.js";
+import { assertDepthAllowed } from "../util/safety.js";
 import { VERSION } from "../version.js";
 import { flagAll, flagBoolean, flagString, parseArgs, type ParsedArgs } from "./args.js";
 
@@ -75,6 +76,8 @@ run-agent options:
 
 async function main(argv: readonly string[]): Promise<number> {
 	const args = parseArgs(argv);
+	// Cheap commands are exempt; only the ones that would spend money recurse.
+	if (["run", "resume", "run-agent"].includes(args.command ?? "")) assertDepthAllowed();
 	const command = args.command ?? (flagBoolean(args, "version", "v") ? "version" : "help");
 
 	switch (command) {

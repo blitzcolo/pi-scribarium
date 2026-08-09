@@ -17,6 +17,7 @@ import {
 } from "../workspace/run-state.js";
 import { archiveAttempt, buildRegeneratePrompt } from "../gates/regenerate.js";
 import type { GateHandler } from "../gates/types.js";
+import { redactSecrets } from "../util/safety.js";
 import { runBuiltin } from "./builtins.js";
 import { resolveItems } from "./items.js";
 import { mapPool } from "./pool.js";
@@ -379,7 +380,9 @@ async function runOneStage(
 	const logFile = layout.logFile(step.id, item?.id);
 	fs.writeFileSync(
 		logFile,
-		`# ${step.id}${item === undefined ? "" : ` / ${item.id}`}\n\n## Prompt\n\n${finalTask}\n`,
+		redactSecrets(
+			`# ${step.id}${item === undefined ? "" : ` / ${item.id}`}\n\n## Prompt\n\n${finalTask}\n`,
+		),
 		"utf-8",
 	);
 
@@ -408,7 +411,7 @@ async function runOneStage(
 		onEvent: (event) => options.onEvent?.({ type: "stage", stepId: step.id, event, ...(item !== undefined ? { itemId: item.id } : {}) }),
 	});
 
-	fs.appendFileSync(logFile, `\n## Final text\n\n${result.text}\n`, "utf-8");
+	fs.appendFileSync(logFile, redactSecrets(`\n## Final text\n\n${result.text}\n`), "utf-8");
 
 	if (result.status !== "completed") {
 		return {

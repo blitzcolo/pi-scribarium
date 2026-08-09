@@ -4,6 +4,7 @@ import * as path from "node:path";
 import type { GateDecisionRecord } from "../gates/types.js";
 import type { StageErrorCode, StageUsage } from "../runtime/run-stage.js";
 import { ScribariumError } from "../util/errors.js";
+import { redactSecrets } from "../util/safety.js";
 import type { RunLayout } from "./layout.js";
 
 export const RUN_STATE_VERSION = 1;
@@ -162,7 +163,9 @@ export class EventLog {
 		const entry: RunEvent = { at: new Date().toISOString(), type, ...fields };
 		try {
 			fs.mkdirSync(path.dirname(this.file), { recursive: true });
-			fs.appendFileSync(this.file, `${JSON.stringify(entry)}\n`, "utf-8");
+			// Redacted here rather than at each call site: the log is what users
+			// paste into issues, and a provider error can quote the request.
+			fs.appendFileSync(this.file, `${redactSecrets(JSON.stringify(entry))}\n`, "utf-8");
 		} catch {
 			// The audit log must never take a run down.
 		}
