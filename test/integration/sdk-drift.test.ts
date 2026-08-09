@@ -15,6 +15,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import { staticResourceLoader } from "../../src/runtime/resource-loader.js";
+import { RETRY_SETTINGS } from "../../src/runtime/run-stage.js";
 import { createScriptedRuntime } from "../helpers/scripted-provider.js";
 
 /**
@@ -200,5 +201,42 @@ describe("session behaviours the design depends on", () => {
 		} finally {
 			session.dispose();
 		}
+	});
+});
+
+/**
+ * Retry has two layers with different backoff behaviour, and a misspelt key
+ * would silently fall back to the SDK defaults — 3 attempts, 2s apart — which
+ * is exactly the policy that turns a rate-limited fan-out into a quietly
+ * degraded profile. Assert the settings actually arrive.
+ */
+describe("retry settings", () => {
+	it("delivers the agent-turn policy we configure", () => {
+		const settings = SettingsManager.inMemory({ retry: RETRY_SETTINGS }).getRetrySettings();
+
+		expect(settings).toMatchObject({ enabled: true, maxRetries: 10, baseDelayMs: 1_000 });
+	});
+
+	it("delivers the provider policy, whose backoff is the capped one", () => {
+		const provider = SettingsManager.inMemory({
+			retry: RETRY_SETTINGS,
+		}).getProviderRetrySettings();
+
+		expect(provider.maxRetries).toBe(8);
+		expect(provider.maxRetryDelayMs).toBe(60_000);
+	});
+
+	// The agent-turn layer computes `baseDelayMs * 2 ** (attempt - 1)` with no
+	// clamp, so the base cannot be raised without the tail growing absurd. If a
+	// future SDK adds a cap this bound can be relaxed — but it must be checked,
+	// not assumed.
+	it("keeps the uncapped agent-turn backoff within a bounded total", () => {
+		const { maxRetries, baseDelayMs } = RETRY_SETTINGS;
+		let total = 0;
+		for (let attempt = 1; attempt <= maxRetries; attempt++) {
+			total += baseDelayMs * 2 ** (attempt - 1);
+		}
+
+		expect(total).toBeLessThanOrEqual(20 * 60 * 1_000);
 	});
 });

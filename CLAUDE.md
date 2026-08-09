@@ -191,6 +191,16 @@ places; where they disagree, the types and compiled source win.
     warning in the run report.
 21. **Auto-retry hides rate limiting.** pi retries transparently, so a 429 storm looks like slowness.
     Count `auto_retry_start` events and report them per stage.
+22. **There are two retry layers, and only one of them caps its backoff.**
+    `retry.provider` (`maxRetries`, `maxRetryDelayMs`, default 60 s) is the HTTP client's retry
+    around a single request; its wait *is* clamped, which makes it the right layer to absorb rate
+    limiting. `retry.maxRetries`/`retry.baseDelayMs` retry the whole agent turn after the stream
+    failed, and `agent-session.js` computes `baseDelayMs * 2 ** (attempt - 1)` with **no clamp** —
+    raising the base alongside a high `maxRetries` produces multi-hour waits. `RETRY_SETTINGS` in
+    `run-stage.ts` is set accordingly (10 turn retries at a 1 s base ≈ 17 min worst case, 8 capped
+    provider retries beneath it). The SDK default — 3 tries, 2 s apart — gives up six seconds into
+    a limit that resets on a sixty-second window, which in a fan-out means a silently smaller
+    reduce input rather than a visible error.
 
 Pin `~0.84.1`. pi ships fast and has renamed packages before; `test/sdk-drift.test.ts` asserts these
 APIs still exist. Keep all SDK contact inside `src/runtime/**` so a breaking change touches few files.

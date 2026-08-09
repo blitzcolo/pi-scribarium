@@ -14,6 +14,42 @@ import { TurnBudget } from "./turn-budget.js";
 /** Default cap on returned stage text. Matches pi's own subagent example. */
 export const DEFAULT_OUTPUT_LIMIT_BYTES = 50 * 1024;
 
+/**
+ * Retry policy, tuned for sustained rate limiting rather than a dropped packet.
+ *
+ * A fan-out over a large corpus can hold a provider near its per-minute token
+ * limit for the length of the run, so 429s arrive in stretches, not as isolated
+ * blips. The default policy — 3 attempts, 2s and 4s apart — gives up six seconds
+ * into a limit that resets on a sixty-second window, and a fan-out failure is
+ * not loud: the item is recorded as failed, the run continues, and the reducer
+ * downstream silently synthesises from fewer inputs. Waiting is the better
+ * failure mode.
+ *
+ * Two independent layers, and the distinction matters:
+ *
+ * - `provider` is the HTTP client's own retry, around a single request. Its
+ *   backoff is **capped** (`maxRetryDelayMs`), so this is the right layer to
+ *   absorb rate limiting: the wait tracks the provider's window instead of
+ *   doubling past it.
+ * - `maxRetries`/`baseDelayMs` retry the whole agent turn after the stream has
+ *   already failed. This backoff is **not capped** — `agent-session.js` computes
+ *   `baseDelayMs * 2 ** (attempt - 1)` with no clamp — so the base has to stay
+ *   small or the tail becomes absurd. At 1s the ten waits run 1s…512s, roughly
+ *   17 minutes in total before an item is finally abandoned. That is deliberate:
+ *   by the time this layer is reached the capped HTTP retries have already been
+ *   exhausted, which means the throttling is real and lasting.
+ *
+ * The sleep is abortable, so Ctrl-C and a step `timeoutMs` both still cut it
+ * short. Retries are counted per stage and surfaced in the run report, because
+ * transparent retrying otherwise makes a 429 storm look like plain slowness.
+ */
+export const RETRY_SETTINGS = {
+	enabled: true,
+	maxRetries: 10,
+	baseDelayMs: 1_000,
+	provider: { maxRetries: 8, maxRetryDelayMs: 60_000 },
+} as const;
+
 export type StageStatus = "completed" | "failed" | "aborted";
 
 export type StageErrorCode =
@@ -118,7 +154,7 @@ export async function runStage(options: RunStageOptions): Promise<RunStageResult
 	// developer's own ~/.pi/agent/settings.json.
 	const settingsManager = SettingsManager.inMemory({
 		compaction: { enabled: agent.compaction },
-		retry: { enabled: true, maxRetries: 2 },
+		retry: RETRY_SETTINGS,
 		images: { blockImages: true },
 		quietStartup: true,
 	});
