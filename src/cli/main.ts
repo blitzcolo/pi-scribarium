@@ -306,8 +306,8 @@ async function commandValidate(args: ParsedArgs): Promise<number> {
 			throw new PreflightError(
 				"No model is available. Some agents do not pin a `model:`, no default is " +
 					"configured, and no provider has usable credentials.\n" +
-					"Run `pi auth login <provider>`, or set defaultProvider/defaultModel in " +
-					"~/.pi/agent/settings.json.",
+					"Set a provider API key (environment variable, or ~/.pi/agent/auth.json) and " +
+					"give ~/.pi/agent/settings.json a defaultProvider and defaultModel.",
 			);
 		}
 	}

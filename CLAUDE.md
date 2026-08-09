@@ -63,6 +63,12 @@ choice for the M2 fan-out over a 30-paper corpus.
 
 - Credentials live in `~/.pi/agent/auth.json` (`{"<provider>": {"type": "api_key", "key": "..."}}`,
   mode 0600). Never commit them; `KIMI_API_KEY` / `DEEPSEEK_API_KEY` also work as env fallbacks.
+- **There is no `pi auth login`.** The real subcommands are `pi auth check|print-api-key|
+  print-bearer-token`, all requiring `--provider` or `--model`; credentials are written by pi's
+  interactive TUI, an env var, or by hand. Two of our error messages recommended the nonexistent
+  command — verify a suggested command exists before putting it in a diagnostic.
+- pi is `@earendil-works/pi-coding-agent` from **github.com/earendil-works/pi**, not `badlogic/pi`
+  as the original design doc had it.
 - Session defaults are in `~/.pi/agent/settings.json` (`defaultProvider`, `defaultModel`,
   `defaultThinkingLevel`).
 - Shipped agents deliberately do **not** pin `model:`, so the package stays portable. Stages run

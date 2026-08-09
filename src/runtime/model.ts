@@ -76,8 +76,11 @@ export async function preflightModels(
 	for (const [providerId, models] of byProvider) {
 		if (!modelRuntime.hasConfiguredAuth(providerId)) {
 			throw new PreflightError(
-				`No credentials configured for provider "${providerId}". ` +
-					`Run \`pi auth login ${providerId}\`, or set the provider's API key.`,
+				`No credentials configured for provider "${providerId}".\n` +
+					`Set the provider's API key environment variable (\`pi --help\` lists them), ` +
+					`or add an entry to ~/.pi/agent/auth.json:\n` +
+					`  { "${providerId}": { "type": "api_key", "key": "..." } }\n` +
+					`Check it with: pi auth check --provider ${providerId}`,
 			);
 		}
 

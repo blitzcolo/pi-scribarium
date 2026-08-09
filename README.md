@@ -40,8 +40,8 @@ architecture is built around making them detectable.
 
 ## Quickstart
 
-Requires Node >= 22.19 and a configured [pi](https://github.com/badlogic/pi)
-provider.
+Requires Node >= 22.19 and a configured [pi](https://github.com/earendil-works/pi)
+provider — see [Models and credentials](#models-and-credentials) below.
 
 ```bash
 npm install -g pi-scribarium
@@ -151,6 +151,50 @@ If you have no results yet, run it anyway. Every place evidence is required is
 marked `EVIDENCE NEEDED`, and the final citation report collects those markers
 into a list of what you still have to do.
 
+## Models and credentials
+
+Models, providers, and credentials all belong to **pi**, not to this tool. There
+is nothing to configure here, and no key ever goes in a pipeline file or a
+workspace.
+
+```bash
+npm install -g @earendil-works/pi-coding-agent   # provides the `pi` binary
+pi                                                # interactive; pick a provider and sign in
+```
+
+Install, provider list, and OAuth flows are pi's to document —
+[github.com/earendil-works/pi](https://github.com/earendil-works/pi), and
+`pi --help` lists every supported provider with its environment variable.
+
+Three files under `~/.pi/agent/`, which is the whole of it:
+
+| File | What it holds |
+|---|---|
+| `auth.json` | Credentials, `0600`. `{ "deepseek": { "type": "api_key", "key": "..." } }` |
+| `settings.json` | `defaultProvider`, `defaultModel`, `defaultThinkingLevel` |
+| `models.json` | Extra models you define, for endpoints pi does not already ship |
+
+(`models-store.json` alongside them is pi's own cache — leave it alone.)
+
+An environment variable works instead of `auth.json` — `DEEPSEEK_API_KEY`,
+`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and so on; `pi --help` has the full list.
+Use `--agent-dir`, or `PI_CODING_AGENT_DIR`, to point at a different config
+directory.
+
+Check what pi thinks it has, then what scribarium needs:
+
+```bash
+pi auth check --provider deepseek   # is this provider usable?
+scribarium validate                 # does every agent resolve to an available model?
+```
+
+`validate` is the one that matters before a long run: it resolves every agent's
+model reference and every provider's credentials up front, so a missing key
+fails in a second rather than twelve papers into a fan-out.
+
+Most providers are built into pi and need only a credential. `models.json` is
+for the exception — a self-hosted or unlisted endpoint.
+
 ## Costs
 
 Two dials, set per run:
@@ -239,8 +283,8 @@ Plain string comparison against files on disk cannot.
 ## Writing your own agents
 
 Agents are Markdown with YAML frontmatter, a strict superset of
-[pi's own subagent format](https://github.com/badlogic/pi) — files move in either
-direction unchanged.
+[pi's own subagent format](https://github.com/earendil-works/pi) — files move in
+either direction unchanged.
 
 ```markdown
 ---
