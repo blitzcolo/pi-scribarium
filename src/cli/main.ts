@@ -10,7 +10,7 @@ import { commandRun } from "./commands/run.js";
 import { commandInit } from "./commands/init.js";
 import { commandRedo } from "./commands/redo.js";
 import { commandDecide, commandResume } from "./commands/resume.js";
-import { collectCorpusInputs, ingestCorpus } from "../ingest/pdf.js";
+import { collectCorpusInputs, formatPageRanges, ingestCorpus } from "../ingest/pdf.js";
 import { readRunDefaults } from "../runtime/defaults.js";
 import { preflightModels } from "../runtime/model.js";
 import { runStage } from "../runtime/run-stage.js";
@@ -347,10 +347,19 @@ async function commandIngest(args: ParsedArgs): Promise<number> {
 				const label = path.basename(file.sourcePath);
 				if (file.status === "failed") {
 					process.stderr.write(`  fail  ${label}: ${file.error}\n`);
-				} else {
-					const pages = file.totalPages !== undefined ? ` (${file.totalPages}p)` : "";
-					process.stdout.write(`  ${file.status.padEnd(9)} ${label}${pages}\n`);
+					return;
 				}
+				const pages = file.totalPages !== undefined ? ` (${file.totalPages}p` : "";
+				// A full-page figure looks exactly like a scanned page, so this is
+				// a note rather than a warning — but the pages an analysis will be
+				// blind to should not be discoverable only by opening the output.
+				const gaps =
+					file.textlessPages !== undefined && file.textlessPages.length > 0
+						? `, no text on p${formatPageRanges(file.textlessPages)}`
+						: "";
+				process.stdout.write(
+					`  ${file.status.padEnd(9)} ${label}${pages}${pages === "" ? "" : `${gaps})`}\n`,
+				);
 			},
 		});
 

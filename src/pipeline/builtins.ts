@@ -3,7 +3,12 @@ import * as path from "node:path";
 
 import { checkCitations, formatCitationReport, type CitationReport } from "../checks/citations.js";
 import { buildReferenceIndex } from "../checks/reference-index.js";
-import { collectCorpusInputs, ingestCorpus, parseExtensionFilter } from "../ingest/pdf.js";
+import {
+	collectCorpusInputs,
+	formatPageRanges,
+	ingestCorpus,
+	parseExtensionFilter,
+} from "../ingest/pdf.js";
 import type { BuiltinStepSpec } from "./schema.js";
 
 export interface BuiltinContext {
@@ -236,22 +241,51 @@ async function runIngest(step: BuiltinStepSpec, ctx: BuiltinContext): Promise<Bu
 		force,
 		onProgress: (file) => {
 			const label = path.basename(file.sourcePath);
-			ctx.onProgress?.(
-				file.status === "failed" ? `  fail  ${label}: ${file.error}` : `  ${file.status.padEnd(9)} ${label}`,
-			);
+			if (file.status === "failed") {
+				ctx.onProgress?.(`  fail  ${label}: ${file.error}`);
+				return;
+			}
+			// A few pages without a text layer are ordinary — a full-page figure
+			// looks exactly like this — but the reader deserves to know which
+			// pages the analysis will be blind to.
+			const gaps =
+				file.textlessPages !== undefined && file.textlessPages.length > 0
+					? ` (no text on page ${formatPageRanges(file.textlessPages)})`
+					: "";
+			ctx.onProgress?.(`  ${file.status.padEnd(9)} ${label}${gaps}`);
 		},
 	});
 
 	const failures = result.files.filter((file) => file.status === "failed");
+	if (failures.length === 0) {
+		return {
+			ok: true,
+			summary: `${result.succeeded} document(s) ready in ${path.relative(ctx.workspace, outDir)}`,
+		};
+	}
+
+	const detail = `${failures.length} document(s) failed: ${failures
+		.map((f) => `${path.basename(f.sourcePath)} (${f.error})`)
+		.join("; ")}`;
+
+	// An optional directory isolates per-file failures, matching how a fan-out
+	// treats one unreadable paper: at several hundred references, a single scan
+	// must not cost the other 399. Losing every file is still fatal — that is a
+	// systematic problem, not one bad document. corpus/ stays strict, because it
+	// is small, hand-picked, and the profile every later stage rests on.
+	if (optional && result.succeeded > 0) {
+		return {
+			ok: true,
+			summary:
+				`${result.succeeded} document(s) ready in ${path.relative(ctx.workspace, outDir)}, ` +
+				`${failures.length} skipped`,
+			error: detail,
+		};
+	}
+
 	return {
-		ok: failures.length === 0,
-		summary: `${result.succeeded} document(s) ready in ${path.relative(ctx.workspace, outDir)}`,
-		...(failures.length > 0
-			? {
-					error: `${failures.length} document(s) failed: ${failures
-						.map((f) => `${path.basename(f.sourcePath)} (${f.error})`)
-						.join("; ")}`,
-				}
-			: {}),
+		ok: false,
+		summary: `${failures.length} of ${result.files.length} document(s) failed to extract`,
+		error: detail,
 	};
 }

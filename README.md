@@ -75,8 +75,35 @@ scribarium approve && scribarium resume  # continues to a full draft
 | `source/` | **Your** notes, results, drafts | The content of your paper |
 
 Two corpus papers are enough to run and not enough to generalise from; the
-profile will say so. Aim for 10–30. Scanned PDFs with no text layer are reported
-as needing OCR rather than silently analysed as empty.
+profile will say so. Aim for 10–30.
+
+### Scanned PDFs
+
+Text-layer detection is **per page**, not per document, because a total
+character count passes the cases that matter. A ten-page scan with one readable
+page sums to a plausible number, and the analysis agent — told to read the paper
+start to finish — has no way to know it received a tenth of one.
+
+| | |
+|---|---|
+| No text on any page | **fails**, naming the file: OCR it (`ocrmypdf in.pdf out.pdf`) |
+| No text on over half the pages | **fails**, naming the pages: `no text layer on 9 of 10 page(s) (2-10)` |
+| A few pages without text | extracts, notes the pages, records `textless_pages:` in the output |
+
+The threshold is 100 characters per page. Measured against a real 22-paper
+corpus: 237 pages, thinnest genuine page 65 characters, median 4,766 — so it
+sits an order of magnitude below any body page while still catching a scan whose
+only extractable text is a page number. A full-page figure is ordinary and is
+noted, not rejected.
+
+In `references/` and `source/` an unreadable file is isolated, the way a fan-out
+isolates one bad paper: the run continues and the file is reported. One scan
+among four hundred references must not cost the other 399. `corpus/` stays
+strict — it is small, hand-picked, and the profile everything else rests on.
+
+Nothing is OCR'd for you. A bundled OCR engine is a large dependency for a tool
+whose one promise is that it works offline, so the job here is to tell you
+exactly which file and which pages need it.
 
 **Keep `corpus/` to one venue.** The profiler reports norms as ratios — "12/14
 use first person plural in the methods" — over whatever is in that directory. It

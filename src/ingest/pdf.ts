@@ -23,8 +23,29 @@ export interface IngestedFile {
 	outputPath: string;
 	totalPages?: number;
 	characters?: number;
+	/** 1-based pages with no usable text layer. Present even when extraction succeeded. */
+	textlessPages?: number[];
 	error?: string;
 }
+
+/**
+ * Below this many characters, a page carries no usable text.
+ *
+ * Measured against a real corpus of 22 CVPR papers: 237 pages, of which the
+ * thinnest genuine page held 65 characters and the median page held 4 766. A
+ * hundred therefore sits an order of magnitude below any real body page while
+ * still catching a scan whose only extractable text is a page number — which is
+ * the failure that otherwise reaches an analysis agent looking like a paper.
+ */
+export const MIN_PAGE_CHARACTERS = 100;
+
+/**
+ * Above this fraction of textless pages, the document is a scan, not a paper
+ * with figures. Below it, textless pages are reported but extraction proceeds:
+ * a full-page figure is ordinary, and 1 page in 237 of the measured corpus is
+ * legitimately near-empty.
+ */
+export const MAX_TEXTLESS_FRACTION = 0.5;
 
 export interface IngestResult {
 	files: IngestedFile[];
@@ -175,31 +196,82 @@ async function ingestOne(
 
 	const pages = await extractPdfPages(sourcePath);
 	const characters = pages.reduce((sum, page) => sum + page.length, 0);
-	if (characters === 0) {
+
+	// Per page, not in total. A ten-page scan with one readable page still sums
+	// to a plausible-looking character count, and the nine lost pages would
+	// never be mentioned again — the analysis agent is told to read the paper
+	// start to finish and has no way to know it received a tenth of one.
+	const textlessPages = pages
+		.map((page, index) => ({ chars: page.trim().length, page: index + 1 }))
+		.filter(({ chars }) => chars < MIN_PAGE_CHARACTERS)
+		.map(({ page }) => page);
+
+	const scanned = pages.length === 0 || textlessPages.length === pages.length;
+	const mostlyScanned = textlessPages.length > pages.length * MAX_TEXTLESS_FRACTION;
+
+	if (scanned || mostlyScanned) {
 		return {
 			status: "failed",
 			sourcePath,
 			outputPath,
 			totalPages: pages.length,
-			error:
-				`extracted no text from ${pages.length} page(s); ` +
-				"the PDF is probably a scan and needs OCR before it can be analysed",
+			characters,
+			textlessPages,
+			error: scanned
+				? `no text layer on any of ${pages.length} page(s); ` +
+					"the PDF is a scan and needs OCR (try `ocrmypdf in.pdf out.pdf`) " +
+					"before it can be analysed"
+				: `no text layer on ${textlessPages.length} of ${pages.length} page(s) ` +
+					`(${formatPageRanges(textlessPages)}); the PDF is partly scanned, and analysing ` +
+					"the readable fraction would misrepresent the paper — OCR it first",
 		};
 	}
 
-	await fsp.writeFile(outputPath, renderDocument(sourcePath, pages, { paginated: true }), "utf-8");
-	return { status: "extracted", sourcePath, outputPath, totalPages: pages.length, characters };
+	await fsp.writeFile(
+		outputPath,
+		renderDocument(sourcePath, pages, { paginated: true, textlessPages }),
+		"utf-8",
+	);
+	return {
+		status: "extracted",
+		sourcePath,
+		outputPath,
+		totalPages: pages.length,
+		characters,
+		...(textlessPages.length > 0 ? { textlessPages } : {}),
+	};
+}
+
+/** `[3, 4, 5, 9]` as `3-5, 9`, so a long list stays readable in one line. */
+export function formatPageRanges(pages: readonly number[]): string {
+	const ranges: string[] = [];
+	for (let i = 0; i < pages.length; ) {
+		const start = pages[i] as number;
+		let end = start;
+		while (i + 1 < pages.length && pages[i + 1] === end + 1) {
+			end = pages[++i] as number;
+		}
+		ranges.push(start === end ? `${start}` : `${start}-${end}`);
+		i++;
+	}
+	return ranges.join(", ");
 }
 
 function renderDocument(
 	sourcePath: string,
 	pages: readonly string[],
-	options: { paginated: boolean },
+	options: { paginated: boolean; textlessPages?: readonly number[] },
 ): string {
 	const frontmatter = [
 		"---",
 		`source: ${JSON.stringify(path.resolve(sourcePath))}`,
 		`pages: ${options.paginated ? pages.length : 1}`,
+		// Recorded in the document itself, not only in the run log: an agent
+		// reading this file is the one that would otherwise report on a figure
+		// page as though it had been blank in the original.
+		...(options.textlessPages !== undefined && options.textlessPages.length > 0
+			? [`textless_pages: [${options.textlessPages.join(", ")}]`]
+			: []),
 		"---",
 		"",
 	].join("\n");

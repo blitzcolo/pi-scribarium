@@ -9,7 +9,7 @@ import { initialRunState, runPipeline } from "../../src/pipeline/engine.js";
 import { parsePipeline } from "../../src/pipeline/load.js";
 import { hashPipeline, newRunId, RunLayout } from "../../src/workspace/layout.js";
 import { EventLog, RunStateStore, type RunState } from "../../src/workspace/run-state.js";
-import { minimalPdf } from "../helpers/minimal-pdf.js";
+import { bodyPage, minimalPdf } from "../helpers/minimal-pdf.js";
 import { createScriptedRuntime, SCRIPTED_MODEL_REF, type Script } from "../helpers/scripted-provider.js";
 
 let workspace: string;
@@ -70,7 +70,7 @@ describe("runPipeline", () => {
 	it("runs ingest and two agent steps in order, end to end", async () => {
 		fs.writeFileSync(
 			path.join(workspace, "corpus", "paper.pdf"),
-			minimalPdf(["A study of neural surrogates for radiative transfer."]),
+			minimalPdf([bodyPage("A study of neural surrogates for radiative transfer.")]),
 		);
 
 		const source = `

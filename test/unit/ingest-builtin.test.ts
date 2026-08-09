@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runBuiltin } from "../../src/pipeline/builtins.js";
 import type { BuiltinStepSpec } from "../../src/pipeline/schema.js";
-import { minimalPdf } from "../helpers/minimal-pdf.js";
+import { bodyPage, minimalPdf } from "../helpers/minimal-pdf.js";
 
 let workspace: string;
 
@@ -35,7 +35,7 @@ function seed(dir: string, files: Record<string, string | Uint8Array>): void {
 
 describe("ingest builtin", () => {
 	it("extracts a named directory into its own text/ subdirectory", async () => {
-		seed("references", { "kowalski.pdf": minimalPdf(["REFERENCE_BODY"]) });
+		seed("references", { "kowalski.pdf": minimalPdf([bodyPage("REFERENCE_BODY")]) });
 
 		const result = await runBuiltin(step({ from: "references" }), ctx());
 
@@ -74,7 +74,7 @@ describe("ingest builtin", () => {
 
 	it("extracts only the requested extensions", async () => {
 		seed("source", {
-			"results.pdf": minimalPdf(["MEASURED_RESULTS"]),
+			"results.pdf": minimalPdf([bodyPage("MEASURED_RESULTS")]),
 			"notes.md": "the author's own notes",
 		});
 
@@ -94,6 +94,50 @@ describe("ingest builtin", () => {
 
 		expect(result.ok).toBe(true);
 		expect(result.summary).toContain(".pdf");
+	});
+
+	/**
+	 * One scan among several hundred references must not cost the other 399,
+	 * which is how every fan-out in this pipeline already treats a bad item.
+	 * corpus/ stays strict: it is small, hand-picked, and the profile every
+	 * later stage rests on.
+	 */
+	describe("failure isolation", () => {
+		const withOneScan = {
+			"good.pdf": minimalPdf([bodyPage("READABLE")]),
+			"scan.pdf": minimalPdf(["", "", ""]),
+		};
+
+		it("isolates an unreadable file in an optional directory", async () => {
+			seed("references", withOneScan);
+
+			const result = await runBuiltin(step({ from: "references", optional: true }), ctx());
+
+			expect(result.ok).toBe(true);
+			expect(result.summary).toContain("1 document(s) ready");
+			expect(result.summary).toContain("1 skipped");
+			// Isolated, not hidden: the reason still has to reach the reader.
+			expect(result.error).toContain("scan.pdf");
+			expect(result.error).toMatch(/OCR/);
+		});
+
+		it("still fails an optional directory when nothing could be read", async () => {
+			seed("references", { "scan.pdf": minimalPdf(["", "", ""]) });
+
+			const result = await runBuiltin(step({ from: "references", optional: true }), ctx());
+
+			// Every file failing is a systematic problem, not one bad document.
+			expect(result.ok).toBe(false);
+		});
+
+		it("fails the corpus on a single unreadable file", async () => {
+			seed("corpus", withOneScan);
+
+			const result = await runBuiltin(step({ from: "corpus" }), ctx());
+
+			expect(result.ok).toBe(false);
+			expect(result.error).toContain("scan.pdf");
+		});
 	});
 });
 

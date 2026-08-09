@@ -5,11 +5,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
 	collectCorpusInputs,
+	formatPageRanges,
 	ingestCorpus,
 	parseExtensionFilter,
 	slugify,
 } from "../../src/ingest/pdf.js";
-import { minimalPdf } from "../helpers/minimal-pdf.js";
+import { bodyPage, minimalPdf } from "../helpers/minimal-pdf.js";
 
 let root: string;
 let corpus: string;
@@ -26,9 +27,15 @@ afterEach(() => {
 	fs.rmSync(root, { recursive: true, force: true });
 });
 
-function writePdf(name: string, pages: string[]): string {
+/**
+ * Pages are padded to a realistic density by default. Ingest treats a page
+ * below `MIN_PAGE_CHARACTERS` as having no text layer, so a fixture built from
+ * a bare marker would be a scan as far as the code is concerned — pass `raw`
+ * when that is what the test is about.
+ */
+function writePdf(name: string, pages: string[], raw = false): string {
 	const target = path.join(corpus, name);
-	fs.writeFileSync(target, minimalPdf(pages));
+	fs.writeFileSync(target, minimalPdf(raw ? pages : pages.map((page) => bodyPage(page))));
 	return target;
 }
 
@@ -75,7 +82,7 @@ describe("ingestCorpus", () => {
 			{ length: 40 },
 			(_, i) => `Sentence ${i} states a distinct and clearly identifiable fact about the study.`,
 		);
-		const source = writePdf("long.pdf", [sentences.join(" ")]);
+		const source = writePdf("long.pdf", [sentences.join(" ")], true);
 
 		const result = await ingestCorpus({ inputs: [source], outDir });
 		const written = fs.readFileSync(result.files[0]?.outputPath ?? "", "utf-8");
@@ -116,12 +123,71 @@ describe("ingestCorpus", () => {
 	// A scanned paper yields zero characters. Left undetected it would reach the
 	// analyst as an empty document and burn a model call producing nothing.
 	it("flags a PDF with no extractable text as needing OCR", async () => {
-		const source = writePdf("scan.pdf", [""]);
+		const source = writePdf("scan.pdf", ["", "", ""], true);
 
 		const result = await ingestCorpus({ inputs: [source], outDir });
 
 		expect(result.files[0]?.status).toBe("failed");
 		expect(result.files[0]?.error).toMatch(/OCR/);
+		expect(result.files[0]?.error).toContain("any of 3 page(s)");
+	});
+
+	/**
+	 * A total-character check passes all of these, which is how they used to
+	 * reach an analysis agent looking like ordinary papers. The agent is told to
+	 * read the document start to finish and has no way to know it was handed a
+	 * tenth of one, so it reports confidently on a paper it never saw.
+	 */
+	describe("partly scanned PDFs", () => {
+		it("refuses a paper whose text survives on only one page in ten", async () => {
+			const pages = [bodyPage("ONLY_REAL_PAGE"), ...Array<string>(9).fill("")];
+			const source = writePdf("partial.pdf", pages, true);
+
+			const result = await ingestCorpus({ inputs: [source], outDir });
+
+			expect(result.files[0]?.status).toBe("failed");
+			expect(result.files[0]?.error).toContain("9 of 10 page(s)");
+			// The specific pages, so the reader knows what to OCR.
+			expect(result.files[0]?.error).toContain("2-10");
+		});
+
+		// The thin layer a scanner leaves behind: page numbers and a header
+		// stamp, extracting to a few characters per page.
+		it("refuses a scan whose only extractable text is page numbers", async () => {
+			const source = writePdf("thin.pdf", ["1", "2", "3", "4", "5", "6"], true);
+
+			const result = await ingestCorpus({ inputs: [source], outDir });
+
+			expect(result.files[0]?.status).toBe("failed");
+			expect(result.files[0]?.error).toMatch(/OCR/);
+		});
+
+		// A full-page figure is ordinary — 1 page in 237 of the measured corpus
+		// is legitimately near-empty — so a few gaps must not reject the paper.
+		it("extracts a paper with a couple of figure pages, recording which", async () => {
+			const pages = [bodyPage("P1"), "", bodyPage("P3"), bodyPage("P4"), bodyPage("P5")];
+			const source = writePdf("figures.pdf", pages, true);
+
+			const result = await ingestCorpus({ inputs: [source], outDir });
+
+			expect(result.files[0]?.status).toBe("extracted");
+			expect(result.files[0]?.textlessPages).toEqual([2]);
+			// Recorded in the document, so the agent reading it knows the gap is
+			// in the original rather than in its own reading.
+			const written = fs.readFileSync(result.files[0]?.outputPath ?? "", "utf-8");
+			expect(written).toContain("textless_pages: [2]");
+		});
+
+		it("says nothing about textless pages when there are none", async () => {
+			const source = writePdf("clean.pdf", ["A", "B"]);
+
+			const result = await ingestCorpus({ inputs: [source], outDir });
+
+			expect(result.files[0]?.textlessPages).toBeUndefined();
+			expect(fs.readFileSync(result.files[0]?.outputPath ?? "", "utf-8")).not.toContain(
+				"textless_pages",
+			);
+		});
 	});
 
 	it("skips work when the output is already current, unless forced", async () => {
@@ -139,8 +205,8 @@ describe("ingestCorpus", () => {
 		const b = path.join(corpus, "b");
 		fs.mkdirSync(a);
 		fs.mkdirSync(b);
-		fs.writeFileSync(path.join(a, "paper.pdf"), minimalPdf(["FROM_A"]));
-		fs.writeFileSync(path.join(b, "paper.pdf"), minimalPdf(["FROM_B"]));
+		fs.writeFileSync(path.join(a, "paper.pdf"), minimalPdf([bodyPage("FROM_A")]));
+		fs.writeFileSync(path.join(b, "paper.pdf"), minimalPdf([bodyPage("FROM_B")]));
 
 		const result = await ingestCorpus({
 			inputs: [path.join(a, "paper.pdf"), path.join(b, "paper.pdf")],
@@ -155,7 +221,7 @@ describe("ingestCorpus", () => {
 
 describe("collectCorpusInputs", () => {
 	it("expands a directory to its supported documents, sorted", () => {
-		fs.writeFileSync(path.join(corpus, "b.pdf"), minimalPdf(["B"]));
+		fs.writeFileSync(path.join(corpus, "b.pdf"), minimalPdf([bodyPage("B")]));
 		fs.writeFileSync(path.join(corpus, "a.md"), "a");
 		fs.writeFileSync(path.join(corpus, "ignore.csv"), "x,y");
 
@@ -170,7 +236,7 @@ describe("collectCorpusInputs", () => {
 	// source/text/ as well would put the same material in front of a writing
 	// agent twice, once at each path.
 	it("narrows a directory scan to the requested extensions", () => {
-		fs.writeFileSync(path.join(corpus, "results.pdf"), minimalPdf(["R"]));
+		fs.writeFileSync(path.join(corpus, "results.pdf"), minimalPdf([bodyPage("R")]));
 		fs.writeFileSync(path.join(corpus, "notes.md"), "notes");
 		fs.writeFileSync(path.join(corpus, "draft.tex"), "draft");
 
@@ -186,6 +252,17 @@ describe("collectCorpusInputs", () => {
 		fs.writeFileSync(odd, "x");
 
 		expect(collectCorpusInputs([odd])).toEqual([odd]);
+	});
+});
+
+describe("formatPageRanges", () => {
+	it.each([
+		[[3], "3"],
+		[[3, 4, 5], "3-5"],
+		[[2, 4, 5, 6, 9], "2, 4-6, 9"],
+		[[], ""],
+	])("renders %j as %j", (pages, expected) => {
+		expect(formatPageRanges(pages)).toBe(expected);
 	});
 });
 

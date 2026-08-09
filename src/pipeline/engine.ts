@@ -327,6 +327,12 @@ async function executeBuiltin(
 	}
 	stepState.status = "completed";
 	options.onEvent?.({ type: "log", message: result.summary });
+	// A builtin can succeed and still have something to say — an optional
+	// directory that isolated a few unreadable files, say. Dropping it here
+	// would make those files disappear from the run entirely.
+	if (result.error !== undefined) {
+		options.onEvent?.({ type: "log", message: `      warning: ${result.error}` });
+	}
 }
 
 /** Template scope shared by every stage in a step. */

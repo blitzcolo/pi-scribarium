@@ -5,6 +5,20 @@
  * test assert on text it chose itself, so extraction is verified end to end
  * through the real pdf.js pipeline rather than against a mock.
  */
+/**
+ * A page marker padded out to the length of a real body page.
+ *
+ * Ingest rejects a PDF whose pages fall below `MIN_PAGE_CHARACTERS`, since that
+ * is what a scan with only a page number extracted looks like. A fixture built
+ * from a bare marker is indistinguishable from one, so tests that mean "an
+ * ordinary paper" have to say so — otherwise they assert against input no real
+ * corpus contains.
+ */
+export function bodyPage(marker: string, repeats = 12): string {
+	const filler = "This sentence exists to give the page a realistic text density. ";
+	return `${marker} ${filler.repeat(repeats)}`;
+}
+
 export function minimalPdf(pageTexts: readonly string[]): Uint8Array {
 	const objects: string[] = [];
 

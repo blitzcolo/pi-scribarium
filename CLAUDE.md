@@ -228,6 +228,17 @@ load-bearing, not organisational:
 - **Ingest is per directory**, into `<dir>/text/`. `source/` uses `only: pdf` — its Markdown and
   LaTeX are already readable in place, and copying them would show a writer the same material at
   two paths. `references/` and `source/` are `optional: true`; an empty `corpus/` is still fatal.
+- **Scan detection is per page, never on the total.** A ten-page scan with one readable page sums
+  to a plausible character count, and the analyst — told to read the paper start to finish — cannot
+  tell it got a tenth of one. `MIN_PAGE_CHARACTERS = 100` is calibrated against a real 22-paper
+  corpus (237 pages; thinnest genuine page 65 chars, median 4 766), so it sits an order of
+  magnitude under any body page. All pages textless, or more than `MAX_TEXTLESS_FRACTION`, fails
+  with the page numbers; a few are recorded as `textless_pages:` in the output and extraction
+  continues, because a full-page figure is ordinary. **Test fixtures must use `bodyPage()`** — a
+  bare marker is indistinguishable from a scan, which is why several fixtures had to change when
+  this landed.
+- **An optional directory isolates per-file failures**, matching how a fan-out treats one bad item;
+  losing every file is still fatal. `corpus/` fails on the first bad document.
 
 ### The reference library
 

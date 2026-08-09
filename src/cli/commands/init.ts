@@ -73,8 +73,10 @@ work out what that venue publishes and how it expects work to be written.
 - Formats: \`.pdf\`, \`.md\`, \`.txt\`, \`.tex\`
 - Aim for 10-30 recent papers. Two is enough to run; it is not enough to
   generalise from, and the profile will say so.
-- Scanned PDFs with no text layer are reported as needing OCR rather than
-  analysed as empty.
+- Scanned PDFs are detected per page. One with no text layer, or with none on
+  more than half its pages, is reported as needing OCR (\`ocrmypdf in.pdf
+  out.pdf\`) rather than analysed as if it were readable. A few blank pages —
+  a full-page figure, say — are noted and extraction continues.
 
 Nothing here is downloaded for you. The tool has no network access, and that is
 deliberate: every citation it produces must trace back to a file you put here.
