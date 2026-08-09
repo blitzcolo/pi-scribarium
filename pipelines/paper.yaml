@@ -17,6 +17,16 @@ vars:
   # `bulk` handles high-volume mechanical work — one call per corpus paper —
   # where a cheap, fast model is the right trade. `judgement` handles the
   # synthesis and writing, where it is not.
+
+  # The language the manuscript is written in. Left as-is it follows the corpus,
+  # which is usually right — you submit in the language the venue publishes in.
+  # State it explicitly when it differs, or when the corpus and your own material
+  # are in different languages, which is where it otherwise goes wrong silently.
+  #
+  #   --var language="Write in Simplified Chinese. Keep technical terms,
+  #                   acronyms, and cited titles in their original English."
+  language: "Write in the same language the corpus papers are written in."
+
   bulk: ""
   judgement: ""
 
@@ -47,6 +57,12 @@ steps:
       Read every analysis under analysis/papers/ and synthesise a profile of
       what this venue publishes and how it expects work to be written.
 
+      Separate what is language-independent (structure, section order, evidence
+      expectations, citation density) from what is specific to the language the
+      corpus is written in (sentence length, voice, hedging phrases). The
+      manuscript may be written in a different language, and only the first kind
+      transfers directly.
+
       If fewer analyses are present than the corpus contains, some papers failed
       to analyse. Say so in the profile rather than presenting it as complete.
     output: analysis/journal-profile.md
@@ -60,6 +76,8 @@ steps:
       The author's own material is under source/ — read all of it first.
 
       Produce the outline and the machine-readable section list.
+
+      Language: ${vars.language}
     output:
       - outline/outline.md
       - outline/sections.json
@@ -87,6 +105,8 @@ steps:
       Outline:         outline/outline.md
       Journal profile: analysis/journal-profile.md
       Author material: source/
+
+      Language: ${vars.language}
     output: draft/${item.id}.md
 
   # Deterministic: ordering and concatenation need no judgement.
@@ -115,4 +135,6 @@ steps:
     model: ${vars.judgement}
     input: |
       Produce the final manuscript from draft/paper.md, applying review/review.md.
+
+      Language: ${vars.language}
     output: final/paper.md

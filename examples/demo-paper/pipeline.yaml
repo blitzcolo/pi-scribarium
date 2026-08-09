@@ -10,6 +10,16 @@ defaults:
 
 vars:
   # Model roles; empty means "use the model configured in pi settings".
+
+  # The language the manuscript is written in. Left as-is it follows the corpus,
+  # which is usually right — you submit in the language the venue publishes in.
+  # State it explicitly when it differs, or when the corpus and your own material
+  # are in different languages, which is where it otherwise goes wrong silently.
+  #
+  #   --var language="Write in Simplified Chinese. Keep technical terms,
+  #                   acronyms, and cited titles in their original English."
+  language: "Write in the same language the corpus papers are written in."
+
   bulk: ""
   judgement: ""
 
@@ -40,6 +50,12 @@ steps:
     input: |
       Read every analysis under analysis/papers/ and synthesise a profile of
       what this venue publishes and how it expects work to be written.
+
+      Separate what is language-independent (structure, section order, evidence
+      expectations, citation density) from what is specific to the language the
+      corpus is written in (sentence length, voice, hedging phrases). The
+      manuscript may be written in a different language, and only the first kind
+      transfers directly.
 
       There are only two papers, so quantify norms as n/2 and be explicit that
       the sample is small.
@@ -82,6 +98,8 @@ steps:
       Outline:         outline/outline.md
       Journal profile: analysis/journal-profile.md
       Author material: source/
+
+      Language: ${vars.language}
     output: draft/${item.id}.md
 
   # Deterministic: ordering and concatenation need no judgement.
@@ -110,4 +128,6 @@ steps:
     model: ${vars.judgement}
     input: |
       Produce the final manuscript from draft/paper.md, applying review/review.md.
+
+      Language: ${vars.language}
     output: final/paper.md

@@ -51,7 +51,10 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
 		// a stray positional. The cost is that a boolean short flag must not be
 		// written immediately before a positional (`-q writer`); every documented
 		// invocation puts positionals first.
-		if (token.startsWith("-") && token.length > 1) {
+		// A flag is a dash followed by a letter. Anything else beginning with a
+		// dash is a value: review feedback is written as a markdown list, so
+		// `-m "- first point"` is the common case, and negative numbers likewise.
+		if (/^--?[A-Za-z]/.test(token)) {
 			const body = token.startsWith("--") ? token.slice(2) : token.slice(1);
 			const equals = body.indexOf("=");
 			if (equals !== -1) {
@@ -59,7 +62,7 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
 				continue;
 			}
 			const next = argv[i + 1];
-			if (next !== undefined && !next.startsWith("-")) {
+			if (next !== undefined && !/^--?[A-Za-z]/.test(next)) {
 				record(body, next);
 				i++;
 			} else {

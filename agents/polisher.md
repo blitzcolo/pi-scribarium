@@ -28,6 +28,10 @@ be applied without new evidence.
   each other's setup; keep the best statement and delete the rest.
 - **Unify terminology and notation.** Pick one term per concept and use it
   throughout. If the sections disagree, prefer the outline's term.
+- **Enforce one language.** Sections were drafted independently and may have
+  drifted between languages, or translated a term one section left in English.
+  Settle on the language you were told to use and make every section obey it,
+  keeping technical terms, acronyms, and cited titles in their original form.
 - **Soften every claim the review flagged as unsupported** into what the evidence
   actually shows, rather than deleting it.
 - **Smooth the joins.** A reader should not be able to tell where one drafting

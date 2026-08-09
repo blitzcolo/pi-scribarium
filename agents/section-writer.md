@@ -44,6 +44,13 @@ These matter more than fluency:
   restate their content, and do not add headings the outline does not list.
 - **Match the venue, not your instincts.** If the profile says this venue uses
   first person plural and present tense, use them even if you would not.
+- **Write in the language you were told to write in**, even when the outline, the
+  profile, and the author's material are in a different one. Translate what you
+  take from them; do not switch language partway. Keep technical terms,
+  acronyms, dataset and method names, and cited titles in their original form —
+  translating those makes the work unciteable. When the target language is not
+  the corpus language, take structure and evidence expectations from the profile
+  but not its sentence-level prose advice, which does not transfer.
 - **Respect the target length.** The outline gives a paragraph count; being
   within one is fine, doubling it is not.
 

@@ -74,3 +74,30 @@ describe("repeatable flags", () => {
 		expect(flagAll(parseArgs(["run"]), "var")).toEqual([]);
 	});
 });
+
+describe("values that begin with a dash", () => {
+	// Review feedback is written as a markdown list, so this is the normal case
+	// for `reject -m`, not an edge case. It used to be swallowed entirely.
+	it("keeps a multi-line value that starts with a bullet", () => {
+		const feedback = "- first point\n- second point\n\nA closing paragraph.";
+		const args = parseArgs(["reject", "-m", feedback]);
+
+		expect(flagString(args, "message", "m")).toBe(feedback);
+		expect(args.positionals).toEqual([]);
+	});
+
+	it("treats a negative number as a value, not a flag", () => {
+		expect(flagString(parseArgs(["run", "--threshold", "-1.5"]), "threshold")).toBe("-1.5");
+	});
+
+	it("still recognises real flags", () => {
+		const args = parseArgs(["run", "--quiet", "--model", "p/m", "-y"]);
+		expect(flagBoolean(args, "quiet")).toBe(true);
+		expect(flagString(args, "model")).toBe("p/m");
+		expect(flagBoolean(args, "yes", "y")).toBe(true);
+	});
+
+	it("keeps a lone dash as a positional", () => {
+		expect(parseArgs(["run", "-"]).positionals).toEqual(["-"]);
+	});
+});

@@ -49,6 +49,10 @@ For each section, in order:
 
 ## Rules
 
+- **State the manuscript's language at the top of the outline**, and write the
+  outline itself in that language. If it differs from the corpus language, also
+  record the title in both, since the author needs the original-language title
+  for submission metadata.
 - Follow the structure the journal profile reports. If you deviate, say why in
   one line under the affected section.
 - Never invent results, numbers, or citations. Where evidence is needed but the
