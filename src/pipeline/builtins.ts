@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
+import { checkCitations, formatCitationReport, type CitationReport } from "../checks/citations.js";
 import { collectCorpusInputs, ingestCorpus } from "../ingest/pdf.js";
 import type { BuiltinStepSpec } from "./schema.js";
 
@@ -34,7 +35,61 @@ export async function runBuiltin(
 			return await runIngest(step, ctx);
 		case "assemble":
 			return assembleSections(step, ctx);
+		case "check-citations":
+			return runCitationCheck(step, ctx);
 	}
+}
+
+/**
+ * Verify that every citation traces to a document in the workspace.
+ *
+ * A mandatory pipeline stage rather than an optional script: a fabricated
+ * reference is the failure that costs the author their credibility rather than
+ * their time, so it should be impossible to finish a run without the check
+ * having run.
+ */
+function runCitationCheck(step: BuiltinStepSpec, ctx: BuiltinContext): BuiltinResult {
+	const manuscript =
+		typeof step.with["manuscript"] === "string" ? step.with["manuscript"] : "final/paper.md";
+	const sources = Array.isArray(step.with["sources"])
+		? (step.with["sources"] as unknown[]).map(String)
+		: ["corpus/text", "analysis/papers", "source"];
+	const out = typeof step.with["out"] === "string" ? step.with["out"] : "review/citations.md";
+
+	let report: CitationReport;
+	try {
+		report = checkCitations({ workspace: ctx.workspace, manuscript, sources });
+	} catch (cause) {
+		return {
+			ok: false,
+			summary: "could not read the manuscript",
+			error: `${manuscript}: ${String(cause)}`,
+		};
+	}
+
+	const target = path.resolve(ctx.workspace, out);
+	fs.mkdirSync(path.dirname(target), { recursive: true });
+	fs.writeFileSync(target, formatCitationReport(report), "utf-8");
+
+	const gaps = report.markers.length;
+	const summary =
+		`${report.citations.length} citation(s) checked, ` +
+		`${report.unsupported.length} unsupported, ${gaps} outstanding marker(s) -> ${out}`;
+
+	// Unsupported citations fail the step. Markers do not: they are the author's
+	// declared to-do list, and failing on them would punish the honesty the rest
+	// of the pipeline is built to encourage.
+	if (report.unsupported.length > 0) {
+		return {
+			ok: false,
+			summary,
+			error:
+				`${report.unsupported.length} citation(s) trace to nothing in the workspace: ` +
+				report.unsupported.map((c) => c.raw).join(", ") +
+				`. See ${out}.`,
+		};
+	}
+	return { ok: true, summary };
 }
 
 /**

@@ -131,3 +131,13 @@ steps:
 
       Language: ${vars.language}
     output: final/paper.md
+
+  # Mandatory, and deterministic on purpose. A fabricated reference is the one
+  # failure here that costs credibility rather than time, so verification must
+  # not be something a model can be argued out of.
+  - id: check-citations
+    builtin: check-citations
+    with:
+      manuscript: final/paper.md
+      sources: [corpus/text, analysis/papers, source]
+      out: review/citations.md
