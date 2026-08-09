@@ -165,10 +165,13 @@ describe("layout", () => {
 		expect(hashPipeline("x")).toMatch(/^sha256:[0-9a-f]{16}$/);
 	});
 
-	it("keeps artifacts inside the run directory", () => {
+	// Artifacts belong to the workspace, not the run: `draft/intro.md` must mean
+	// the same file across runs so iterating on one paper works.
+	it("resolves artifacts against the workspace and per-run files against the run", () => {
 		expect(layout.artifact("analysis/paper.md")).toBe(
-			path.join(layout.runDir, "artifacts", "analysis", "paper.md"),
+			path.join(workspace, "analysis", "paper.md"),
 		);
+		expect(layout.statusFile.startsWith(layout.runDir)).toBe(true);
 		expect(layout.logFile("analyze", "paper-01")).toBe(
 			path.join(layout.runDir, "logs", "analyze.paper-01.md"),
 		);

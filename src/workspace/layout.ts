@@ -9,6 +9,7 @@ import * as path from "node:path";
  * <workspace>/
  *   corpus/                     source documents
  *   corpus/text/                ingested Markdown
+ *   analysis/ outline/ draft/   artifacts the agents produce
  *   .scribarium/agents/*.md     workspace-local agent overrides
  *   runs/
  *     latest -> 20260809T183000-3f2a
@@ -18,12 +19,12 @@ import * as path from "node:path";
  *       events.jsonl            append-only audit log
  *       logs/<stepId>.md        per-step prompt and final text
  *       sessions/*.jsonl        pi session transcripts
- *       artifacts/              everything the agents produced
+ *       attempts/               artifacts superseded by a re-run (M3)
  * ```
  *
- * Artifacts live under the run directory rather than the workspace root so that
- * two runs never overwrite each other, and so a run can be inspected or deleted
- * as one unit.
+ * Artifacts live in the workspace, not under the run directory: a workspace is
+ * one paper being worked on, so `draft/intro.md` means the same file across
+ * runs. The run directory holds only what is genuinely per-run.
  */
 export class RunLayout {
 	readonly runDir: string;
@@ -44,8 +45,12 @@ export class RunLayout {
 	get pipelineCopy(): string {
 		return path.join(this.runDir, "pipeline.yaml");
 	}
-	get artifactsDir(): string {
-		return path.join(this.runDir, "artifacts");
+	/**
+	 * Archive of superseded artifacts, written when a step is re-run (M3).
+	 * Live artifacts stay in the workspace, not here.
+	 */
+	get attemptsDir(): string {
+		return path.join(this.runDir, "attempts");
 	}
 	get sessionsDir(): string {
 		return path.join(this.runDir, "sessions");
@@ -54,9 +59,20 @@ export class RunLayout {
 		return path.join(this.runDir, "logs");
 	}
 
-	/** Absolute path for a declared artifact, e.g. `analysis/paper.md`. */
+	/**
+	 * Absolute path for a declared artifact, e.g. `analysis/paper.md`.
+	 *
+	 * Artifacts live in the **workspace**, not under the run directory. A
+	 * workspace is one paper being worked on, so `draft/intro.md` should mean the
+	 * same file across runs — that is what makes iterating, and reading a
+	 * previous run's output, natural. Stages therefore run with the workspace as
+	 * cwd, which also lets a prompt say `corpus/text/x.md` and `analysis/x.md`
+	 * without either path climbing out of a run directory. The run directory
+	 * keeps what is genuinely per-run: status, events, logs, sessions, and
+	 * superseded attempts.
+	 */
 	artifact(relativePath: string): string {
-		return path.join(this.artifactsDir, relativePath);
+		return path.join(this.workspace, relativePath);
 	}
 
 	logFile(stepId: string, itemId?: string): string {
@@ -65,7 +81,7 @@ export class RunLayout {
 	}
 
 	ensure(): void {
-		for (const dir of [this.runDir, this.artifactsDir, this.sessionsDir, this.logsDir]) {
+		for (const dir of [this.runDir, this.sessionsDir, this.logsDir]) {
 			fs.mkdirSync(dir, { recursive: true });
 		}
 	}
