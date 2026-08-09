@@ -39,20 +39,25 @@ const KNOWN_STEP_KEYS = new Set([
  * runs before the first model call: discovering a typo after twelve papers have
  * been analysed is the expensive failure mode this exists to prevent.
  */
-export function loadPipeline(filePath: string, registry?: AgentRegistry): PipelineSpec {
+export function loadPipeline(
+	filePath: string,
+	registry?: AgentRegistry,
+	overrides: Record<string, string> = {},
+): PipelineSpec {
 	let source: string;
 	try {
 		source = fs.readFileSync(filePath, "utf-8");
 	} catch {
 		throw new PipelineError(`Cannot read pipeline file: ${filePath}`);
 	}
-	return parsePipeline(source, filePath, registry);
+	return parsePipeline(source, filePath, registry, overrides);
 }
 
 export function parsePipeline(
 	source: string,
 	filePath: string,
 	registry?: AgentRegistry,
+	overrides: Record<string, string> = {},
 ): PipelineSpec {
 	const lineCounter = new LineCounter();
 	const doc = parseDocument(source, { lineCounter, keepSourceTokens: true });
@@ -77,7 +82,7 @@ export function parsePipeline(
 
 	const name = typeof root["name"] === "string" ? root["name"] : "pipeline";
 	const description = typeof root["description"] === "string" ? root["description"] : undefined;
-	const vars = readVars(root["vars"], ctx);
+	const vars = { ...readVars(root["vars"], ctx), ...overrides };
 	const defaults = readDefaults(root["defaults"], ctx);
 
 	const rawSteps = root["steps"];
@@ -89,7 +94,7 @@ export function parsePipeline(
 	const seenIds = new Set<string>();
 
 	for (const [index, raw] of rawSteps.entries()) {
-		const step = readStep(raw, index, ctx, defaults);
+		const step = readStep(raw, index, ctx, defaults, vars);
 		if (seenIds.has(step.id)) {
 			throw new PipelineError(`${ctx.at(["steps", index, "id"])}: duplicate step id "${step.id}"`);
 		}
@@ -117,6 +122,7 @@ function readStep(
 	index: number,
 	ctx: Context,
 	defaults: PipelineSpec["defaults"],
+	vars: Record<string, string>,
 ): StepSpec {
 	if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
 		throw new PipelineError(`${ctx.at(["steps", index])}: each step must be a mapping`);
@@ -186,7 +192,15 @@ function readStep(
 	}
 
 	const agent = requireString(step["agent"], ["steps", index, "agent"], ctx);
-	const model = optionalString(step["model"], ["steps", index, "model"], ctx) ?? defaults.model;
+	// `model` is resolved against vars at load time rather than run time, so a
+	// pipeline can name a role ("the cheap one") without hardcoding a provider,
+	// and preflight still sees a concrete reference to check credentials for.
+	const model = resolveModelRef(
+		optionalString(step["model"], ["steps", index, "model"], ctx) ?? defaults.model,
+		vars,
+		["steps", index, "model"],
+		ctx,
+	);
 	const maxTurns =
 		optionalInteger(step["max_turns"], ["steps", index, "max_turns"], ctx) ?? defaults.maxTurns;
 	const timeoutMs =
@@ -245,6 +259,28 @@ function validateReferences(spec: PipelineSpec, ctx: Context, registry?: AgentRe
 
 		producedBy.set(step.id, index);
 	}
+}
+
+function resolveModelRef(
+	ref: string | undefined,
+	vars: Record<string, string>,
+	at: Path,
+	ctx: Context,
+): string | undefined {
+	if (ref === undefined) return undefined;
+	for (const reference of placeholders(ref)) {
+		const key = /^vars\.(.+)$/.exec(reference)?.[1];
+		if (key === undefined || vars[key] === undefined) {
+			throw new PipelineError(
+				`${ctx.at(at)}: "model" may only reference \${vars.*}, and \${${reference}} is not defined. ` +
+					`Defined vars: ${Object.keys(vars).join(", ") || "(none)"}`,
+			);
+		}
+	}
+	const resolved = ref.replace(/\$\{vars\.([^}]+)\}/g, (_m, key: string) => vars[key.trim()] ?? "");
+	// An empty role var means "unset": fall through to the session default rather
+	// than passing an empty string on as if it named a model.
+	return resolved.trim().length > 0 ? resolved.trim() : undefined;
 }
 
 export function placeholders(template: string): string[] {

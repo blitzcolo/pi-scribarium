@@ -204,3 +204,46 @@ describe("placeholders", () => {
 		expect(placeholders("none here")).toEqual([]);
 	});
 });
+
+describe("model roles", () => {
+	const source = `
+vars:
+  bulk: ""
+  judgement: ""
+steps:
+  - id: cheap
+    agent: outliner
+    model: \${vars.bulk}
+  - id: careful
+    agent: outliner
+    model: \${vars.judgement}
+`;
+
+	// A pipeline names a role, not a provider, so the same file runs on whatever
+	// the reader has configured.
+	it("leaves an empty role unset so the session default applies", () => {
+		const spec = parsePipeline(source, FILE, registry("outliner"));
+		for (const step of spec.steps) {
+			expect("model" in step ? step.model : undefined).toBeUndefined();
+		}
+	});
+
+	it("resolves a role from vars, including --var overrides", () => {
+		const spec = parsePipeline(source, FILE, registry("outliner"), {
+			bulk: "deepseek/deepseek-v4-flash",
+			judgement: "kimi-coding/k3-256k",
+		});
+		expect(spec.steps[0]).toMatchObject({ model: "deepseek/deepseek-v4-flash" });
+		expect(spec.steps[1]).toMatchObject({ model: "kimi-coding/k3-256k" });
+	});
+
+	it("rejects a model role that is not a defined var", () => {
+		expect(() =>
+			parsePipeline(
+				"vars:\n  a: x\nsteps:\n  - id: s\n    agent: outliner\n    model: ${vars.nope}\n",
+				FILE,
+				registry("outliner"),
+			),
+		).toThrow(/"model" may only reference \$\{vars\.\*\}.*is not defined/s);
+	});
+});

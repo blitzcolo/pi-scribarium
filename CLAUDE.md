@@ -25,22 +25,52 @@ changes their shape. Keep it in the build, not the test tree.
 
 ## Models
 
-This machine is configured for a single model: **`kimi-coding/k3-256k`** (Anthropic Messages API
-at `https://api.kimi.com/coding`, 256k context, text + image, thinking `high`). pi ships
-`kimi-coding` as a built-in provider with that model already in its catalog, so no `models.json`
-entry is needed — only a credential.
+Two providers are configured. pi ships both as **built-in** providers with these models already in
+their catalogs, so no `models.json` entry is needed — only a credential.
 
-- Credential lives in `~/.pi/agent/auth.json` (`{"kimi-coding": {"type": "api_key", "key": "..."}}`,
-  mode 0600). Never commit it; `KIMI_API_KEY` also works as an env fallback.
-- Defaults are set in `~/.pi/agent/settings.json` (`defaultProvider`, `defaultModel`,
+| Model | Context | Input | Cost (in/out per M) | Notes |
+|---|---|---|---|---|
+| `kimi-coding/k3-256k` | 262 144 | text + image | 0 / 0 | Anthropic Messages at `api.kimi.com/coding`; subscription |
+| `deepseek/deepseek-v4-flash` | 1 000 000 | **text only** | $0.14 / $0.28 | OpenAI Completions at `api.deepseek.com`; cheap and fast |
+
+Measured on the demo pipeline: k3-256k ≈ 5 min at an unmeasurable $0; deepseek-v4-flash ≈ 3 min at
+$0.0071. DeepSeek is roughly an order of magnitude faster per call, which is what makes it the right
+choice for the M2 fan-out over a 30-paper corpus.
+
+- Credentials live in `~/.pi/agent/auth.json` (`{"<provider>": {"type": "api_key", "key": "..."}}`,
+  mode 0600). Never commit them; `KIMI_API_KEY` / `DEEPSEEK_API_KEY` also work as env fallbacks.
+- Session defaults are in `~/.pi/agent/settings.json` (`defaultProvider`, `defaultModel`,
   `defaultThinkingLevel`).
 - Shipped agents deliberately do **not** pin `model:`, so the package stays portable. Stages run
   with an in-memory `SettingsManager` and therefore cannot pick up those defaults on their own —
   `readRunDefaults()` reads them and passes them in explicitly. Removing that would silently fall
   back to whichever model is listed first.
 - **`k3-256k` reports zero cost** in pi's catalog (it is a subscription model). `getSessionStats().cost`
-  will be `$0.0000`; token counts are still real. Cost reporting in M1 must not be read as
-  "the run was free" on this provider.
+  will be `$0.0000` while token counts stay real, so the usage report says so explicitly rather than
+  letting `$0.0000` read as "this run was free".
+- **`deepseek-v4-flash` is text-only.** Anything that needs image input must use k3-256k.
+
+### Model roles
+
+Pipelines name a *role*, not a provider, so the same file runs on whatever the reader has
+configured:
+
+```yaml
+vars:
+  bulk: ""        # high-volume mechanical work — one call per corpus paper
+  judgement: ""   # synthesis and writing
+steps:
+  - id: analyze
+    agent: corpus-analyst
+    model: ${vars.bulk}
+```
+
+An empty role falls through to the session default. Roles resolve **at load time** against `vars`
+(plus repeatable `--var key=value` overrides), so preflight still sees a concrete reference and can
+check credentials before the run starts. `model:` may reference only `${vars.*}` — anything else is
+rejected, since a step's model cannot depend on a previous step's output.
+
+For this machine: `--var bulk=deepseek/deepseek-v4-flash --var judgement=kimi-coding/k3-256k`.
 
 ## Language
 

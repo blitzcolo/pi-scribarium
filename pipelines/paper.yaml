@@ -12,6 +12,16 @@ defaults:
 vars:
   topic: "State your topic here, or override with --var topic=..."
 
+  # Model roles rather than provider names, so the same pipeline runs on
+  # whatever you have configured. Leave a role empty to fall back to the model
+  # in ~/.pi/agent/settings.json.
+  #
+  # `bulk` handles high-volume mechanical work — one call per corpus paper —
+  # where a cheap, fast model is the right trade. `judgement` handles the
+  # synthesis and writing, where it is not.
+  bulk: ""
+  judgement: ""
+
 steps:
   # Deterministic: no model, no cost, identical every run.
   - id: ingest
@@ -24,6 +34,7 @@ steps:
   # corpus out of a single context window.
   - id: profile
     agent: journal-profiler
+    model: ${vars.judgement}
     input: |
       Read every ingested paper under corpus/text/ and synthesise a profile of
       what this venue publishes and how it expects work to be written.
@@ -31,6 +42,7 @@ steps:
 
   - id: outline
     agent: outliner
+    model: ${vars.judgement}
     input: |
       Topic: ${vars.topic}
       Journal profile: ${steps.profile.outputs}

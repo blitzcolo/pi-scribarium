@@ -13,7 +13,7 @@ import { preflightModels } from "../runtime/model.js";
 import { runStage } from "../runtime/run-stage.js";
 import { PreflightError, ScribariumError, UsageError } from "../util/errors.js";
 import { VERSION } from "../version.js";
-import { flagBoolean, flagString, parseArgs, type ParsedArgs } from "./args.js";
+import { flagAll, flagBoolean, flagString, parseArgs, type ParsedArgs } from "./args.js";
 
 const HELP = `scholarly ${VERSION} — multi-agent orchestration for academic writing
 
@@ -36,6 +36,7 @@ Common options:
   --model <provider/model>  Override the model for agents that do not pin one
 
 run options:
+  --var key=value           Override a pipeline var (repeatable)
   --quiet                   Do not print per-tool progress
 
 status / report options:
@@ -71,6 +72,7 @@ async function main(argv: readonly string[]): Promise<number> {
 				workspace,
 				agentDir,
 				quiet: flagBoolean(args, "quiet"),
+				vars: parseVarFlags(args),
 				...(pipeline !== undefined ? { pipelinePath: pipeline } : {}),
 				...(modelOverride !== undefined ? { modelOverride } : {}),
 			});
@@ -94,6 +96,17 @@ async function main(argv: readonly string[]): Promise<number> {
 			process.stderr.write(`Unknown command "${command}".\n\n${HELP}`);
 			return 2;
 	}
+}
+
+/** Collect repeated `--var key=value` flags. */
+function parseVarFlags(args: ParsedArgs): Record<string, string> {
+	const vars: Record<string, string> = {};
+	for (const value of flagAll(args, "var")) {
+		const equals = value.indexOf("=");
+		if (equals === -1) throw new UsageError(`--var expects key=value, got "${value}"`);
+		vars[value.slice(0, equals).trim()] = value.slice(equals + 1);
+	}
+	return vars;
 }
 
 function resolveContext(args: ParsedArgs): { workspace: string; agentDir: string } {

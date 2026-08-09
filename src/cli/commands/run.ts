@@ -18,6 +18,8 @@ export interface RunCommandOptions {
 	agentDir: string;
 	pipelinePath?: string;
 	modelOverride?: string;
+	/** `--var k=v` overrides, applied over the pipeline's own vars. */
+	vars: Record<string, string>;
 	quiet: boolean;
 }
 
@@ -35,7 +37,7 @@ export async function commandRun(options: RunCommandOptions): Promise<number> {
 
 	// Loading validates the whole spec, including agent names and every template
 	// reference, before a single model call is made.
-	const spec = loadPipeline(pipelinePath, registry);
+	const spec = loadPipeline(pipelinePath, registry, options.vars);
 
 	const defaults = readRunDefaults(workspace, agentDir);
 	const fallbackModel = options.modelOverride ?? defaults.modelRef;

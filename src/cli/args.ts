@@ -9,11 +9,27 @@ export interface ParsedArgs {
 	command: string | undefined;
 	positionals: string[];
 	flags: ReadonlyMap<string, string | true>;
+	/**
+	 * Every value seen for each flag, in order. `flags` keeps only the last, which
+	 * is what callers want for `--workspace`; repeatable flags such as `--var`
+	 * would otherwise silently lose all but the final occurrence.
+	 */
+	repeated: ReadonlyMap<string, string[]>;
 }
 
 export function parseArgs(argv: readonly string[]): ParsedArgs {
 	const flags = new Map<string, string | true>();
+	const repeated = new Map<string, string[]>();
 	const positionals: string[] = [];
+
+	const record = (name: string, value: string | true): void => {
+		flags.set(name, value);
+		if (typeof value === "string") {
+			const seen = repeated.get(name);
+			if (seen === undefined) repeated.set(name, [value]);
+			else seen.push(value);
+		}
+	};
 	let sawSeparator = false;
 
 	for (let i = 0; i < argv.length; i++) {
@@ -39,15 +55,15 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
 			const body = token.startsWith("--") ? token.slice(2) : token.slice(1);
 			const equals = body.indexOf("=");
 			if (equals !== -1) {
-				flags.set(body.slice(0, equals), body.slice(equals + 1));
+				record(body.slice(0, equals), body.slice(equals + 1));
 				continue;
 			}
 			const next = argv[i + 1];
 			if (next !== undefined && !next.startsWith("-")) {
-				flags.set(body, next);
+				record(body, next);
 				i++;
 			} else {
-				flags.set(body, true);
+				record(body, true);
 			}
 			continue;
 		}
@@ -56,7 +72,12 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
 	}
 
 	const [command, ...rest] = positionals;
-	return { ...(command !== undefined ? { command } : { command: undefined }), positionals: rest, flags };
+	return {
+		...(command !== undefined ? { command } : { command: undefined }),
+		positionals: rest,
+		flags,
+		repeated,
+	};
 }
 
 export function flagString(args: ParsedArgs, ...names: string[]): string | undefined {
@@ -69,4 +90,9 @@ export function flagString(args: ParsedArgs, ...names: string[]): string | undef
 
 export function flagBoolean(args: ParsedArgs, ...names: string[]): boolean {
 	return names.some((name) => args.flags.get(name) !== undefined);
+}
+
+/** All values given for a repeatable flag, in order. */
+export function flagAll(args: ParsedArgs, name: string): string[] {
+	return args.repeated.get(name) ?? [];
 }

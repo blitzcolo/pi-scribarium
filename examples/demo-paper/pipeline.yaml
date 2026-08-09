@@ -9,6 +9,10 @@ defaults:
   max_turns: 20
 
 vars:
+  # Model roles; empty means "use the model configured in pi settings".
+  bulk: ""
+  judgement: ""
+
   topic: >
     A physics-informed neural emulator for longwave radiative transfer,
     evaluated on the Hale et al. benchmark suite.
@@ -21,6 +25,7 @@ steps:
 
   - id: profile
     agent: journal-profiler
+    model: ${vars.judgement}
     input: |
       Read every ingested paper under corpus/text/ and synthesise a profile of
       what this venue publishes and how it expects work to be written.
@@ -31,6 +36,7 @@ steps:
 
   - id: outline
     agent: outliner
+    model: ${vars.judgement}
     input: |
       Topic: ${vars.topic}
       Journal profile: ${steps.profile.outputs}

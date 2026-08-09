@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { flagBoolean, flagString, parseArgs } from "../../src/cli/args.js";
+import { flagAll, flagBoolean, flagString, parseArgs } from "../../src/cli/args.js";
 
 describe("parseArgs", () => {
 	it("separates the command from its positionals", () => {
@@ -59,5 +59,18 @@ describe("parseArgs", () => {
 		const args = parseArgs(["agents"]);
 		expect(flagString(args, "workspace")).toBeUndefined();
 		expect(flagBoolean(args, "strict")).toBe(false);
+	});
+});
+
+describe("repeatable flags", () => {
+	it("keeps every occurrence, not just the last", () => {
+		const args = parseArgs(["run", "--var", "bulk=a/b", "--var", "judgement=c/d"]);
+		expect(flagAll(args, "var")).toEqual(["bulk=a/b", "judgement=c/d"]);
+		// `flags` still holds the last, which is what single-value flags want.
+		expect(flagString(args, "var")).toBe("judgement=c/d");
+	});
+
+	it("returns nothing for a flag never given", () => {
+		expect(flagAll(parseArgs(["run"]), "var")).toEqual([]);
 	});
 });
