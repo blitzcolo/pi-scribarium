@@ -70,3 +70,49 @@ steps:
     gate: Approve the outline before drafting
     show: outline/outline.md
     on_reject: outline
+
+  # The second map: one session per section, so each is written against the
+  # outline rather than against the growing draft, and a long paper never has to
+  # fit in one context window.
+  - id: write
+    agent: section-writer
+    model: ${vars.judgement}
+    foreach:
+      json: outline/sections.json
+      path: sections
+    parallel: 3
+    input: |
+      Draft the section "${item.title}" (id ${item.id}).
+
+      Outline:         outline/outline.md
+      Journal profile: analysis/journal-profile.md
+      Author material: source/
+    output: draft/${item.id}.md
+
+  # Deterministic: ordering and concatenation need no judgement.
+  - id: assemble
+    builtin: assemble
+    with:
+      sections: outline/sections.json
+      from: draft
+      out: draft/paper.md
+
+  - id: review
+    agent: reviewer
+    model: ${vars.judgement}
+    input: |
+      Review the draft at draft/paper.md as a referee for this venue.
+    output: review/review.md
+
+  - id: approve-review
+    gate: Read the review before the final pass
+    show:
+      - review/review.md
+    on_reject: write
+
+  - id: polish
+    agent: polisher
+    model: ${vars.judgement}
+    input: |
+      Produce the final manuscript from draft/paper.md, applying review/review.md.
+    output: final/paper.md

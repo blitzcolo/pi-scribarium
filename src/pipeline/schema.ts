@@ -39,7 +39,7 @@ export interface AgentStepSpec {
 	timeoutMs?: number;
 }
 
-export type BuiltinName = "ingest";
+export type BuiltinName = "ingest" | "assemble";
 
 export interface BuiltinStepSpec {
 	kind: "builtin";
@@ -105,4 +105,4 @@ export interface PipelineSpec {
 	filePath: string;
 }
 
-export const BUILTIN_NAMES: readonly BuiltinName[] = ["ingest"];
+export const BUILTIN_NAMES: readonly BuiltinName[] = ["ingest", "assemble"];
