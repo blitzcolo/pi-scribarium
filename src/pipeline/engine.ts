@@ -197,6 +197,7 @@ async function executeAgent(
 
 	stepState.turns = result.turns;
 	stepState.usage = result.usage;
+	if (modelRef !== undefined) stepState.model = modelRef;
 	if (result.sessionFile !== undefined) stepState.sessionFile = result.sessionFile;
 
 	fs.appendFileSync(layout.logFile(step.id), `\n## Final text\n\n${result.text}\n`, "utf-8");

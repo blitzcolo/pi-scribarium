@@ -5,6 +5,8 @@ import * as path from "node:path";
 import { getAgentDir, ModelRuntime } from "@earendil-works/pi-coding-agent";
 
 import { AgentRegistry } from "../agents/registry.js";
+import { commandEvents, commandReport, commandStatus } from "./commands/inspect.js";
+import { commandRun } from "./commands/run.js";
 import { collectCorpusInputs, ingestCorpus } from "../ingest/pdf.js";
 import { readRunDefaults } from "../runtime/defaults.js";
 import { preflightModels } from "../runtime/model.js";
@@ -18,6 +20,10 @@ const HELP = `scholarly ${VERSION} — multi-agent orchestration for academic wr
 Usage: scholarly <command> [options]
 
 Commands:
+  run [pipeline]            Run a pipeline end to end
+  status [runId]            Where a run got to (defaults to the latest run)
+  report [runId]            Token and cost accounting per step
+  events [runId]            Append-only log of what happened
   agents                    List discovered agent definitions
   validate                  Check every agent's model reference and credentials
   ingest <paths...>         Convert a PDF/text corpus to Markdown
@@ -28,6 +34,12 @@ Common options:
   --workspace <dir>         Workspace root (default: cwd)
   --agent-dir <dir>         pi config dir (default: ~/.pi/agent)
   --model <provider/model>  Override the model for agents that do not pin one
+
+run options:
+  --quiet                   Do not print per-tool progress
+
+status / report options:
+  --json                    Machine-readable output
 
 ingest options:
   --out <dir>               Output directory (default: <workspace>/corpus/text)
@@ -51,6 +63,25 @@ async function main(argv: readonly string[]): Promise<number> {
 		case "version":
 			process.stdout.write(`${VERSION}\n`);
 			return 0;
+		case "run": {
+			const { workspace, agentDir } = resolveContext(args);
+			const pipeline = args.positionals[0];
+			const modelOverride = flagString(args, "model", "m");
+			return await commandRun({
+				workspace,
+				agentDir,
+				quiet: flagBoolean(args, "quiet"),
+				...(pipeline !== undefined ? { pipelinePath: pipeline } : {}),
+				...(modelOverride !== undefined ? { modelOverride } : {}),
+			});
+		}
+		case "status":
+			return commandStatus(resolveContext(args).workspace, args.positionals[0], flagBoolean(args, "json"));
+		case "report":
+		case "cost":
+			return commandReport(resolveContext(args).workspace, args.positionals[0], flagBoolean(args, "json"));
+		case "events":
+			return commandEvents(resolveContext(args).workspace, args.positionals[0]);
 		case "agents":
 			return commandAgents(args);
 		case "validate":

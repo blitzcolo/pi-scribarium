@@ -1,0 +1,41 @@
+version: 1
+name: paper
+description: >
+  Profile a target journal from a corpus of its papers, then produce an outline
+  for a new manuscript in that venue.
+
+# Every agent may be overridden per step; unpinned agents use the model
+# configured in ~/.pi/agent/settings.json, or --model.
+defaults:
+  max_turns: 30
+
+vars:
+  topic: "State your topic here, or override with --var topic=..."
+
+steps:
+  # Deterministic: no model, no cost, identical every run.
+  - id: ingest
+    builtin: ingest
+    with:
+      from: corpus
+
+  # M1 runs one analyst over the whole corpus. M2 replaces this with a foreach
+  # that analyses each paper in its own session, which is what keeps a 30-paper
+  # corpus out of a single context window.
+  - id: profile
+    agent: journal-profiler
+    input: |
+      Read every ingested paper under corpus/text/ and synthesise a profile of
+      what this venue publishes and how it expects work to be written.
+    output: analysis/journal-profile.md
+
+  - id: outline
+    agent: outliner
+    input: |
+      Topic: ${vars.topic}
+      Journal profile: ${steps.profile.outputs}
+
+      Produce the outline and the machine-readable section list.
+    output:
+      - outline/outline.md
+      - outline/sections.json

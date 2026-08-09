@@ -1,0 +1,42 @@
+version: 1
+name: demo-paper
+description: >
+  Five-minute demo. Profiles a two-paper synthetic corpus, then outlines a new
+  manuscript for the same venue. Small on purpose: it exercises every part of
+  the pipeline without a large model bill.
+
+defaults:
+  max_turns: 20
+
+vars:
+  topic: >
+    A physics-informed neural emulator for longwave radiative transfer,
+    evaluated on the Hale et al. benchmark suite.
+
+steps:
+  - id: ingest
+    builtin: ingest
+    with:
+      from: corpus
+
+  - id: profile
+    agent: journal-profiler
+    input: |
+      Read every ingested paper under corpus/text/ and synthesise a profile of
+      what this venue publishes and how it expects work to be written.
+
+      There are only two papers, so quantify norms as n/2 and be explicit that
+      the sample is small.
+    output: analysis/journal-profile.md
+
+  - id: outline
+    agent: outliner
+    input: |
+      Topic: ${vars.topic}
+      Journal profile: ${steps.profile.outputs}
+
+      The author has no results yet. Mark every place evidence is required with
+      EVIDENCE NEEDED rather than inventing findings.
+    output:
+      - outline/outline.md
+      - outline/sections.json
