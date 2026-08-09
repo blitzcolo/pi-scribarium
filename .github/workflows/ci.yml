@@ -45,7 +45,7 @@ jobs:
           mkdir -p /tmp/smoke && cd /tmp/smoke
           npm init -y >/dev/null
           npm install "$GITHUB_WORKSPACE"/pi-scribarium-*.tgz --silent
-          npx scholarly version
-          npx scholarly agents | grep -q corpus-analyst
-          npx scholarly init ./demo >/dev/null
+          npx scribarium version
+          npx scribarium agents | grep -q corpus-analyst
+          npx scribarium init ./demo >/dev/null
           test -f ./demo/pipeline.yaml

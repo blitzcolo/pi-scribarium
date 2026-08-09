@@ -16,7 +16,7 @@ describe("recursion guard", () => {
 		expect(currentDepth({})).toBe(0);
 	});
 
-	// An agent granted the bash tool can invoke scholarly, which would recurse
+	// An agent granted the bash tool can invoke scribarium, which would recurse
 	// and keep paying for itself.
 	it("refuses once the depth limit is reached", () => {
 		expect(() => assertDepthAllowed({ [DEPTH_VAR]: "3" })).toThrow(RecursionError);

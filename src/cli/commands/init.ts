@@ -43,7 +43,7 @@ export function commandInit(target: string, force: boolean): number {
 			"Next:\n" +
 			`  1. copy 10-30 papers from your target journal into ${path.join(root, "corpus")}\n` +
 			`  2. put your own notes and results into ${path.join(root, "source")}\n` +
-			`  3. scholarly run --workspace ${root} --var topic="..."\n`,
+			`  3. scribarium run --workspace ${root} --var topic="..."\n`,
 	);
 	return 0;
 }
@@ -95,15 +95,15 @@ A pi-scribarium workspace. One workspace is one paper.
 ## Run it
 
 \`\`\`bash
-scholarly run --workspace . --var topic="your topic in a sentence"
+scribarium run --workspace . --var topic="your topic in a sentence"
 \`\`\`
 
 The run stops at \`approve-outline\` for review. Then:
 
 \`\`\`bash
-scholarly reject  -m "what to change"   # regenerates the outline with your notes
-scholarly approve
-scholarly resume
+scribarium reject  -m "what to change"   # regenerates the outline with your notes
+scribarium approve
+scribarium resume
 \`\`\`
 
 ## What it produces
@@ -117,7 +117,7 @@ scholarly resume
 | \`outline/sections.json\` | Machine-readable section list |
 | \`runs/<id>/\` | Per-run status, logs, transcripts, superseded drafts |
 
-\`scholarly status\` shows where a run got to; \`scholarly report\` shows what it
+\`scribarium status\` shows where a run got to; \`scribarium report\` shows what it
 cost.
 `;
 }

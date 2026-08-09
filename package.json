@@ -13,7 +13,7 @@
   "license": "MIT",
   "type": "module",
   "bin": {
-    "scholarly": "dist/cli/main.js"
+    "scribarium": "dist/cli/main.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

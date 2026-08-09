@@ -144,7 +144,7 @@ export function commandDecide(
 
 	writeDecision(layout, pending, decision);
 	process.stdout.write(
-		`Recorded ${decision.kind} for ${pending}. Continue with: scholarly resume ${resolved}\n`,
+		`Recorded ${decision.kind} for ${pending}. Continue with: scribarium resume ${resolved}\n`,
 	);
 	return 0;
 }

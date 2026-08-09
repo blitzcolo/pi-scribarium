@@ -4,7 +4,7 @@ import { ScribariumError } from "./errors.js";
  * Recursion guard.
  *
  * The orchestrator does not spawn agents that spawn agents, but `bash` can be
- * opted into per agent, and an agent with a shell can invoke `scholarly`. That
+ * opted into per agent, and an agent with a shell can invoke `scribarium`. That
  * is a cycle that would keep paying for itself, so depth is tracked through the
  * environment. The variable names follow the pi subagent ecosystem's convention
  * so that nesting is counted correctly across tools, not just within this one.
@@ -34,7 +34,7 @@ export function assertDepthAllowed(env: NodeJS.ProcessEnv = process.env): void {
 	if (depth >= limit) {
 		throw new RecursionError(
 			`Refusing to run: already ${depth} level(s) deep (${DEPTH_VAR}=${depth}, limit ${limit}).\n` +
-				"An agent with the bash tool appears to have invoked scholarly, which would " +
+				"An agent with the bash tool appears to have invoked scribarium, which would " +
 				`recurse. Raise ${MAX_DEPTH_VAR} only if you are certain the nesting terminates.`,
 		);
 	}

@@ -101,9 +101,9 @@ export async function commandRun(options: RunCommandOptions): Promise<number> {
 		if (final.status === "awaiting_gate") {
 			process.stdout.write(
 				`\nWaiting for review. Inspect the artifacts, then:\n` +
-					`  scholarly approve ${layout.runId}\n` +
-					`  scholarly reject  ${layout.runId} -m "what to change"\n` +
-					`  scholarly resume  ${layout.runId}\n`,
+					`  scribarium approve ${layout.runId}\n` +
+					`  scribarium reject  ${layout.runId} -m "what to change"\n` +
+					`  scribarium resume  ${layout.runId}\n`,
 			);
 			return EXIT_AWAITING_GATE;
 		}

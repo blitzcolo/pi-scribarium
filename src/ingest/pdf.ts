@@ -50,7 +50,7 @@ const TEXT_EXTENSIONS = new Set([".md", ".txt", ".markdown", ".tex"]);
 /**
  * Files that live in a corpus directory but are not corpus documents.
  *
- * `scholarly init` drops guidance files into corpus/ and source/, and without
+ * `scribarium init` drops guidance files into corpus/ and source/, and without
  * this they are ingested and analysed as if they were papers from the target
  * journal — quietly contaminating the profile the whole pipeline is built on.
  */

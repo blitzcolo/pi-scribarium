@@ -19,9 +19,9 @@ import { assertDepthAllowed } from "../util/safety.js";
 import { VERSION } from "../version.js";
 import { flagAll, flagBoolean, flagString, parseArgs, type ParsedArgs } from "./args.js";
 
-const HELP = `scholarly ${VERSION} — multi-agent orchestration for academic writing
+const HELP = `scribarium ${VERSION} — multi-agent orchestration for academic writing
 
-Usage: scholarly <command> [options]
+Usage: scribarium <command> [options]
 
 Commands:
   init <dir>                Scaffold a workspace for one paper
@@ -77,7 +77,7 @@ run-agent options:
 /**
  * Exit quietly when the reader goes away.
  *
- * `scholarly agents | head`, or quitting a pager, closes stdout while we are
+ * `scribarium agents | head`, or quitting a pager, closes stdout while we are
  * still writing to it. Node surfaces that as an unhandled EPIPE and crashes with
  * a stack trace, which looks like a failure of the command rather than the
  * normal end of a pipeline.

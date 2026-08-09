@@ -41,23 +41,23 @@ provider.
 ```bash
 npm install -g pi-scribarium
 
-scholarly init my-paper
+scribarium init my-paper
 cd my-paper
 
 # corpus/  ← 10-30 papers from your target journal (.pdf .md .txt .tex)
 # source/  ← your own notes, results, drafts
 
-scholarly validate                       # credentials and models resolve?
-scholarly ingest                         # extract text; free, no model calls
-scholarly run --var topic="one sentence describing your paper"
+scribarium validate    # credentials and models resolve?
+scribarium ingest      # extract text; free, no model calls
+scribarium run --var topic="one sentence describing your paper"
 ```
 
 The run halts at the outline for review:
 
 ```bash
-scholarly reject -m "Add a limitations section; the evaluation needs a baseline"
-scholarly resume                         # regenerates only the outline
-scholarly approve && scholarly resume    # continues to a full draft
+scribarium reject -m "Add a limitations section; the evaluation needs a baseline"
+scribarium resume                        # regenerates only the outline
+scribarium approve && scribarium resume  # continues to a full draft
 ```
 
 ## Preparing your material
@@ -80,15 +80,17 @@ into a list of what you still have to do.
 Two dials, set per run:
 
 ```bash
-scholarly run \
-  --var bulk=deepseek/deepseek-v4-flash \    # one call per corpus paper
-  --var judgement=anthropic/claude-opus-4-5  # synthesis and writing
+scribarium run \
+  --var bulk=deepseek/deepseek-v4-flash \
+  --var judgement=anthropic/claude-opus-4-5
+# bulk      → one call per corpus paper
+# judgement → synthesis and writing
 ```
 
 `bulk` handles the high-volume mechanical work where a cheap fast model is the
 right trade; `judgement` handles the parts where it is not. Leave either empty to
 use your configured default. A three-paper demo run costs a few cents;
-`scholarly report` breaks it down per stage.
+`scribarium report` breaks it down per stage.
 
 Cost is reported from the SDK's own accounting. Some providers price
 subscription models at zero — the report says so explicitly rather than letting
@@ -99,8 +101,8 @@ subscription models at zero — the report says so explicitly rather than lettin
 The manuscript language is stated, not inferred:
 
 ```bash
-scholarly run --var language="Write in Simplified Chinese. Keep technical terms,
-                              acronyms, and cited titles in their original English."
+scribarium run --var language="Write in Simplified Chinese. Keep technical terms,
+                               acronyms, and cited titles in their original English."
 ```
 
 It defaults to the corpus language, which is usually right. It matters when your
@@ -113,7 +115,7 @@ survives a change of language.
 
 A gate stops the run for your decision. On a terminal it prompts; piped to a log
 it writes `runs/<id>/gates/<step>.request.json`, exits **10**, and waits for
-`scholarly approve` or `reject`. The same command therefore works by hand and in
+`scribarium approve` or `reject`. The same command therefore works by hand and in
 CI, and an unattended batch never blocks on a prompt nobody can see.
 
 Rejecting rewinds to the step that produced the artifact and re-runs it with your
@@ -123,11 +125,11 @@ a steer — by the time you answer, the original session is gone — which also 
 it reproducible and puts your words in the transcript.
 
 ```bash
-scholarly status              # where a run got to
-scholarly report              # tokens and cost per stage
-scholarly events              # append-only log of what happened
-scholarly redo outline -m ".."  # re-open a finished step when feedback arrives late
-scholarly resume              # continue; completed steps are never re-run
+scribarium status                # where a run got to
+scribarium report                # tokens and cost per stage
+scribarium events                # append-only log of what happened
+scribarium redo outline -m "..." # re-open a finished step when feedback arrives late
+scribarium resume                # continue; completed steps are never re-run
 ```
 
 Interrupted runs resume per item: a fan-out killed halfway re-runs only the

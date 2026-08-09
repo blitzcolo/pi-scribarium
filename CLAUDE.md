@@ -1,7 +1,7 @@
 # pi-scribarium
 
 Multi-agent orchestration for academic writing, built on the Pi Agent SDK
-(`@earendil-works/pi-coding-agent`). The `scholarly` CLI runs each pipeline stage as an isolated
+(`@earendil-works/pi-coding-agent`). The `scribarium` CLI runs each pipeline stage as an isolated
 in-process agent session; stages share nothing but files in the workspace directory.
 
 ## Commands
@@ -11,7 +11,7 @@ npm run build            # tsc -> dist/
 npm run typecheck        # tsc --noEmit over src/ + test/
 npm test                 # unit + integration (scripted provider, no network, no cost)
 
-# The bin is `scholarly` (dist/cli/main.js); run it directly during development:
+# The bin is `scribarium` (dist/cli/main.js); run it directly during development:
 node dist/cli/main.js validate               # preflight: resolve every agent's model + auth
 node dist/cli/main.js run pipelines/paper.yaml --workspace examples/demo-paper
 node dist/cli/main.js resume <runId>
@@ -227,7 +227,7 @@ against it.
   CI. A run piped to a log must never block on a prompt nobody can see.
   `--gate-mode` forces one; `--yes` approves everything.
 - **File mode** writes `runs/<id>/gates/<step>.request.json`, persists, and exits
-  **10**. The decision arrives later via `scholarly approve|reject`, so a long
+  **10**. The decision arrives later via `scribarium approve|reject`, so a long
   unattended batch does not hold a session open waiting for a human who may be
   asleep.
 - **A decision is consumed once.** Leaving it in place would re-reject the

@@ -198,7 +198,7 @@ describe("LaTeX sources", () => {
 });
 
 describe("non-document files", () => {
-	// `scholarly init` drops guidance into corpus/, and ingesting it silently
+	// `scribarium init` drops guidance into corpus/, and ingesting it silently
 	// contaminated the journal profile with the tool's own documentation.
 	it.each(["README.md", "readme.md", "_README.md", ".notes.md"])(
 		"does not treat %s as a corpus document",

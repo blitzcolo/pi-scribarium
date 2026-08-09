@@ -69,7 +69,7 @@ export function commandRedo(options: RedoOptions): number {
 			(options.feedback === undefined
 				? ""
 				: `Feedback will be folded into "${options.stepId}".\n`) +
-			`\nContinue with: scholarly resume ${runId}\n`,
+			`\nContinue with: scribarium resume ${runId}\n`,
 	);
 	return 0;
 }

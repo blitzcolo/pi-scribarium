@@ -123,7 +123,7 @@ describe("gates", () => {
 		const request = JSON.parse(fs.readFileSync(gateRequestFile(layout, "approve-outline"), "utf-8"));
 		expect(request.title).toBe("Approve the outline");
 		expect(request.artifacts[0]).toMatchObject({ path: "outline/outline.md", exists: true });
-		expect(request.howToRespond.approve).toContain("scholarly approve");
+		expect(request.howToRespond.approve).toContain("scribarium approve");
 
 		// Only the outline step reached the model.
 		expect(scripted.requests.every((r) => !r.systemPrompt.includes("You are writer"))).toBe(true);

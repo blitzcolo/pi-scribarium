@@ -17,7 +17,7 @@ export function gateDecisionFile(layout: RunLayout, stepId: string): string {
  * Headless gate.
  *
  * Writes what a reviewer needs to decide, then defers. The run exits 10 and the
- * decision arrives later through `scholarly approve` / `reject`, which is what
+ * decision arrives later through `scribarium approve` / `reject`, which is what
  * makes the pipeline usable from CI or a long unattended batch: the process does
  * not sit holding a session open waiting for a human who may be asleep.
  */
@@ -50,9 +50,9 @@ export function createFileGate(layout: RunLayout): GateHandler {
 					onReject: request.step.onReject ?? null,
 					usageSoFar: request.usageSoFar,
 					howToRespond: {
-						approve: `scholarly approve ${request.runId} ${request.step.id}`,
-						reject: `scholarly reject ${request.runId} ${request.step.id} -m "what to change"`,
-						thenResume: `scholarly resume ${request.runId}`,
+						approve: `scribarium approve ${request.runId} ${request.step.id}`,
+						reject: `scribarium reject ${request.runId} ${request.step.id} -m "what to change"`,
+						thenResume: `scribarium resume ${request.runId}`,
 					},
 				},
 				null,
