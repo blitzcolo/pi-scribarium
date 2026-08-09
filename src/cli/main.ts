@@ -7,6 +7,7 @@ import { getAgentDir, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { AgentRegistry } from "../agents/registry.js";
 import { commandEvents, commandReport, commandStatus } from "./commands/inspect.js";
 import { commandRun } from "./commands/run.js";
+import { commandInit } from "./commands/init.js";
 import { commandDecide, commandResume } from "./commands/resume.js";
 import { collectCorpusInputs, ingestCorpus } from "../ingest/pdf.js";
 import { readRunDefaults } from "../runtime/defaults.js";
@@ -21,6 +22,7 @@ const HELP = `scholarly ${VERSION} — multi-agent orchestration for academic wr
 Usage: scholarly <command> [options]
 
 Commands:
+  init <dir>                Scaffold a workspace for one paper
   run [pipeline]            Run a pipeline end to end
   resume [runId]            Continue a run that stopped at a gate or a failure
   approve [runId] [step]    Approve a pending gate
@@ -77,6 +79,11 @@ async function main(argv: readonly string[]): Promise<number> {
 		case "version":
 			process.stdout.write(`${VERSION}\n`);
 			return 0;
+		case "init": {
+			const target = args.positionals[0];
+			if (target === undefined) throw new UsageError("init requires a directory.");
+			return commandInit(target, flagBoolean(args, "force"));
+		}
 		case "run": {
 			const { workspace, agentDir } = resolveContext(args);
 			const pipeline = args.positionals[0];
@@ -243,7 +250,7 @@ async function commandIngest(args: ParsedArgs): Promise<number> {
 
 	const inputs = collectCorpusInputs(targets.map((t) => path.resolve(workspace, t)));
 	if (inputs.length === 0) {
-		process.stderr.write(`No .pdf, .md, or .txt files found in ${targets.join(", ")}\n`);
+		process.stderr.write(`No .pdf, .md, .txt, or .tex files found in ${targets.join(", ")}\n`);
 		return 2;
 	}
 

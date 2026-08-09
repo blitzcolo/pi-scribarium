@@ -57,6 +57,7 @@ steps:
     input: |
       Topic: ${vars.topic}
       Journal profile: ${steps.profile.outputs}
+      The author's own material is under source/ — read all of it first.
 
       Produce the outline and the machine-readable section list.
     output:

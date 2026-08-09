@@ -172,3 +172,27 @@ describe("slugify", () => {
 		expect(slugify(input)).toBe(expected);
 	});
 });
+
+describe("LaTeX sources", () => {
+	// A journal corpus is usually PDFs, but an author's own material is often
+	// .tex. It is already text, and the markup carries structure worth keeping.
+	it("passes a .tex file through with its markup intact", async () => {
+		const source = path.join(corpus, "manuscript.tex");
+		fs.writeFileSync(
+			source,
+			"\\section{Method}\nWe train on \\cite{hersbach2020} profiles.\n",
+		);
+
+		const result = await ingestCorpus({ inputs: [source], outDir });
+
+		expect(result.files[0]?.status).toBe("copied");
+		const written = fs.readFileSync(result.files[0]?.outputPath ?? "", "utf-8");
+		expect(written).toContain("\\section{Method}");
+		expect(written).toContain("\\cite{hersbach2020}");
+	});
+
+	it("picks .tex up when scanning a directory", () => {
+		fs.writeFileSync(path.join(corpus, "a.tex"), "x");
+		expect(collectCorpusInputs([corpus]).map((p) => path.basename(p))).toContain("a.tex");
+	});
+});

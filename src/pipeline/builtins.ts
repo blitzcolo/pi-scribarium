@@ -52,7 +52,7 @@ async function runIngest(step: BuiltinStepSpec, ctx: BuiltinContext): Promise<Bu
 		return {
 			ok: false,
 			summary: "no source documents found",
-			error: `No .pdf, .md, or .txt files found under ${sourceDir}`,
+			error: `No .pdf, .md, .txt, or .tex files found under ${sourceDir}`,
 		};
 	}
 

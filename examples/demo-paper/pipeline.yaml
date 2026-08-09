@@ -51,6 +51,7 @@ steps:
     input: |
       Topic: ${vars.topic}
       Journal profile: ${steps.profile.outputs}
+      The author's own material is under source/ — read all of it first.
 
       The author has no results yet. Mark every place evidence is required with
       EVIDENCE NEEDED rather than inventing findings.

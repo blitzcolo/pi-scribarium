@@ -236,6 +236,6 @@ steps:
 		}));
 
 		expect(final.status).toBe("failed");
-		expect(final.steps["ingest"]?.error?.message).toMatch(/No \.pdf, \.md, or \.txt files/);
+		expect(final.steps["ingest"]?.error?.message).toMatch(/No \.pdf, \.md, \.txt, or \.tex files/);
 	});
 });

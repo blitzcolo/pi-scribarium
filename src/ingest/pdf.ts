@@ -33,7 +33,7 @@ export interface IngestResult {
 }
 
 export interface IngestOptions {
-	/** Source files. `.pdf` is extracted; `.md`/`.txt` are copied through. */
+	/** Source files. `.pdf` is extracted; `.md`/`.txt`/`.tex` are copied through. */
 	inputs: readonly string[];
 	/** Directory to write Markdown into. Created if absent. */
 	outDir: string;
@@ -42,7 +42,10 @@ export interface IngestOptions {
 	onProgress?: (file: IngestedFile) => void;
 }
 
-const TEXT_EXTENSIONS = new Set([".md", ".txt", ".markdown"]);
+// `.tex` is passed through as-is: it is already text, and the markup carries
+// real signal about structure (\section, \cite) that is worth keeping rather
+// than stripping.
+const TEXT_EXTENSIONS = new Set([".md", ".txt", ".markdown", ".tex"]);
 
 /** Filesystem-safe, stable identifier derived from a file name. */
 export function slugify(filePath: string): string {
@@ -155,7 +158,7 @@ async function ingestOne(
 			status: "failed",
 			sourcePath,
 			outputPath,
-			error: `unsupported extension "${extension}" (expected .pdf, .md, or .txt)`,
+			error: `unsupported extension "${extension}" (expected .pdf, .md, .txt, or .tex)`,
 		};
 	}
 
