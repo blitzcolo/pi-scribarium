@@ -4,8 +4,6 @@ description: >
   Profile a target journal from a corpus of its papers, then produce an outline
   for a new manuscript in that venue.
 
-# Every agent may be overridden per step; unpinned agents use the model
-# configured in ~/.pi/agent/settings.json, or --model.
 defaults:
   max_turns: 30
 
@@ -29,15 +27,28 @@ steps:
     with:
       from: corpus
 
-  # M1 runs one analyst over the whole corpus. M2 replaces this with a foreach
-  # that analyses each paper in its own session, which is what keeps a 30-paper
-  # corpus out of a single context window.
+  # The map half. One session per paper, so a thirty-paper corpus never has to
+  # fit in one context window, and a single unreadable file cannot discard the
+  # analyses already paid for.
+  - id: analyze
+    agent: corpus-analyst
+    model: ${vars.bulk}
+    foreach: "corpus/text/*.md"
+    parallel: 4
+    input: |
+      Analyse the paper at ${item.path}.
+    output: analysis/papers/${item.id}.md
+
+  # The reduce half. Reads only the per-paper analyses, never the papers.
   - id: profile
     agent: journal-profiler
     model: ${vars.judgement}
     input: |
-      Read every ingested paper under corpus/text/ and synthesise a profile of
+      Read every analysis under analysis/papers/ and synthesise a profile of
       what this venue publishes and how it expects work to be written.
+
+      If fewer analyses are present than the corpus contains, some papers failed
+      to analyse. Say so in the profile rather than presenting it as complete.
     output: analysis/journal-profile.md
 
   - id: outline

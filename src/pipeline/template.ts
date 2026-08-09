@@ -1,4 +1,5 @@
 import { PipelineError } from "./load.js";
+import type { ForeachItem } from "./schema.js";
 
 export interface TemplateScope {
 	vars: Record<string, string>;
@@ -8,6 +9,8 @@ export interface TemplateScope {
 	output?: string;
 	/** Outputs produced by earlier steps, keyed by step id. */
 	steps: Record<string, { outputs: string[] }>;
+	/** The current fan-out item, when inside a foreach step. */
+	item?: ForeachItem;
 }
 
 /**
@@ -36,6 +39,12 @@ function lookup(reference: string, scope: TemplateScope): string | undefined {
 
 	const varMatch = /^vars\.(.+)$/.exec(reference);
 	if (varMatch?.[1] !== undefined) return scope.vars[varMatch[1]];
+
+	const itemMatch = /^item\.(.+)$/.exec(reference);
+	if (itemMatch?.[1] !== undefined) {
+		const value = scope.item?.[itemMatch[1]];
+		return value === undefined || value === null ? undefined : String(value);
+	}
 
 	const stepMatch = /^steps\.([^.]+)\.outputs$/.exec(reference);
 	if (stepMatch?.[1] !== undefined) {

@@ -23,11 +23,22 @@ steps:
     with:
       from: corpus
 
+  # The map half: one session per paper.
+  - id: analyze
+    agent: corpus-analyst
+    model: ${vars.bulk}
+    foreach: "corpus/text/*.md"
+    parallel: 2
+    input: |
+      Analyse the paper at ${item.path}.
+    output: analysis/papers/${item.id}.md
+
+  # The reduce half: reads the analyses, never the papers.
   - id: profile
     agent: journal-profiler
     model: ${vars.judgement}
     input: |
-      Read every ingested paper under corpus/text/ and synthesise a profile of
+      Read every analysis under analysis/papers/ and synthesise a profile of
       what this venue publishes and how it expects work to be written.
 
       There are only two papers, so quantify norms as n/2 and be explicit that

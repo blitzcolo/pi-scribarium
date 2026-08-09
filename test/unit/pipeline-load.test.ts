@@ -135,13 +135,10 @@ steps:
 
 		// A silently skipped gate would let a run sail past an approval the author
 		// explicitly asked for, so unimplemented kinds must fail loudly.
-		it.each([
-			["foreach", "M2"],
-			["gate", "M3"],
-		])("rejects the not-yet-supported %s step", (key, milestone) => {
-			const source = `steps:\n  - id: a\n    agent: outliner\n    ${key}: something\n`;
+		it("rejects the not-yet-supported gate step", () => {
+			const source = "steps:\n  - id: a\n    agent: outliner\n    gate: something\n";
 			expect(() => parsePipeline(source, FILE, registry("outliner"))).toThrow(
-				new RegExp(`"${key}" is not supported yet \\(planned for ${milestone}\\)`),
+				/"gate" is not supported yet \(planned for M3\)/,
 			);
 		});
 
@@ -245,5 +242,81 @@ steps:
 				registry("outliner"),
 			),
 		).toThrow(/"model" may only reference \$\{vars\.\*\}.*is not defined/s);
+	});
+});
+
+describe("foreach steps", () => {
+	const base = (extra: string) => `
+steps:
+  - id: analyze
+    agent: outliner
+    foreach: "corpus/text/*.md"
+    output: analysis/\${item.id}.md
+${extra}
+`;
+
+	it("parses a glob fan-out with defaults", () => {
+		const spec = parsePipeline(base(""), FILE, registry("outliner"));
+		expect(spec.steps[0]).toMatchObject({
+			kind: "foreach",
+			source: { kind: "glob", pattern: "corpus/text/*.md" },
+			concurrency: 4,
+		});
+	});
+
+	it("parses json and inline item sources", () => {
+		const json = parsePipeline(
+			`steps:\n  - id: w\n    agent: outliner\n    foreach:\n      json: outline/sections.json\n      path: sections\n    output: draft/\${item.id}.md\n`,
+			FILE,
+			registry("outliner"),
+		);
+		expect(json.steps[0]).toMatchObject({
+			source: { kind: "json", file: "outline/sections.json", path: "sections" },
+		});
+
+		const inline = parsePipeline(
+			`steps:\n  - id: w\n    agent: outliner\n    foreach:\n      items: [{id: a}, {id: b}]\n    output: x/\${item.id}.md\n`,
+			FILE,
+			registry("outliner"),
+		);
+		expect(inline.steps[0]).toMatchObject({ source: { kind: "items" } });
+	});
+
+	it("honours parallel and max_failures, and caps concurrency", () => {
+		const spec = parsePipeline(base("    parallel: 6\n    max_failures: 2"), FILE, registry("outliner"));
+		expect(spec.steps[0]).toMatchObject({ concurrency: 6, maxFailures: 2 });
+
+		expect(() => parsePipeline(base("    parallel: 99"), FILE, registry("outliner"))).toThrow(
+			/parallel is capped at 8/,
+		);
+	});
+
+	// Without an ${item.*} reference every item writes the same path and N
+	// concurrent sessions race on one file, last writer winning, silently.
+	it("refuses a fan-out output that every item would share", () => {
+		const source = `
+steps:
+  - id: analyze
+    agent: outliner
+    foreach: "corpus/*.md"
+    output: analysis/all.md
+`;
+		expect(() => parsePipeline(source, FILE, registry("outliner"))).toThrow(
+			/a foreach output must reference \$\{item\.\*\}/,
+		);
+	});
+
+	it("allows ${item.*} inside a fan-out but not in a plain agent step", () => {
+		expect(() =>
+			parsePipeline(base("    input: Analyse \${item.path}."), FILE, registry("outliner")),
+		).not.toThrow();
+
+		const plain = `
+steps:
+  - id: a
+    agent: outliner
+    input: Analyse \${item.path}.
+`;
+		expect(() => parsePipeline(plain, FILE, registry("outliner"))).toThrow(/not in scope/);
 	});
 });

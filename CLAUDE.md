@@ -195,6 +195,27 @@ places; where they disagree, the types and compiled source win.
 Pin `~0.84.1`. pi ships fast and has renamed packages before; `test/sdk-drift.test.ts` asserts these
 APIs still exist. Keep all SDK contact inside `src/runtime/**` so a breaking change touches few files.
 
+## Fan-out
+
+`foreach` runs one agent per item in its own session — the map half of the
+map-reduce this project exists for. A thirty-paper corpus never has to fit in one
+context window, and one unreadable file cannot discard the analyses already paid
+for.
+
+- Concurrency defaults to 4 and is hard-capped at 8, matching pi's own subagent
+  example. `parallel:` sets it per step.
+- A fan-out `output:` **must** reference `${item.*}`, enforced at load time.
+  Without it every item writes the same path and N concurrent sessions race on
+  one file, last writer winning, silently.
+- Failures are values, not exceptions. A failed item is recorded in
+  `status.json` and the rest continue; the step still counts as completed so the
+  reducer downstream can report what is missing. Only an exhausted
+  `max_failures:` budget, or losing every item, stops the run.
+- `status.json` is rewritten as each item settles, so a kill costs at most the
+  work still in flight.
+- Item ids come from the filename stem (glob) or an `id` field (json/items) and
+  must be stable across runs, or resume could not tell which items are done.
+
 ## Testing
 
 `test/helpers/scripted-provider.ts` is the seam the whole suite rests on. It registers an

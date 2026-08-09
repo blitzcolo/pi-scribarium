@@ -4,11 +4,14 @@ import { LineCounter, parseDocument, type Document } from "yaml";
 
 import type { AgentRegistry } from "../agents/registry.js";
 import { ScribariumError } from "../util/errors.js";
+import { DEFAULT_CONCURRENCY, MAX_CONCURRENCY } from "./pool.js";
 import {
 	BUILTIN_NAMES,
 	PIPELINE_VERSION,
 	type AgentStepSpec,
 	type BuiltinStepSpec,
+	type ForeachSource,
+	type ForeachStepSpec,
 	type PipelineSpec,
 	type StepSpec,
 } from "./schema.js";
@@ -28,6 +31,9 @@ const KNOWN_STEP_KEYS = new Set([
 	"timeout_ms",
 	"builtin",
 	"with",
+	"foreach",
+	"parallel",
+	"max_failures",
 ]);
 
 /**
@@ -131,11 +137,7 @@ function readStep(
 
 	// Reject reserved-but-unimplemented kinds explicitly. Silently skipping a
 	// `gate` would let a run sail past an approval the author asked for.
-	for (const [key, milestone] of [
-		["foreach", "M2"],
-		["gate", "M3"],
-		["parallel", "M2"],
-	] as const) {
+	for (const [key, milestone] of [["gate", "M3"]] as const) {
 		if (step[key] !== undefined) {
 			throw new PipelineError(
 				`${ctx.at(["steps", index, key])}: "${key}" is not supported yet (planned for ${milestone})`,
@@ -207,6 +209,45 @@ function readStep(
 		optionalInteger(step["timeout_ms"], ["steps", index, "timeout_ms"], ctx) ?? defaults.timeoutMs;
 	const input = optionalString(step["input"], ["steps", index, "input"], ctx);
 
+	if (step["foreach"] !== undefined) {
+		const source = readForeachSource(step["foreach"], ["steps", index, "foreach"], ctx);
+		const concurrency =
+			optionalInteger(step["parallel"], ["steps", index, "parallel"], ctx) ?? DEFAULT_CONCURRENCY;
+		if (concurrency > MAX_CONCURRENCY) {
+			throw new PipelineError(
+				`${ctx.at(["steps", index, "parallel"])}: parallel is capped at ${MAX_CONCURRENCY}`,
+			);
+		}
+		const maxFailures = optionalInteger(step["max_failures"], ["steps", index, "max_failures"], ctx);
+
+		// Without an ${item.*} reference every item writes the same path, and N
+		// concurrent sessions race on one file — silently, with the last writer
+		// winning. Cheaper to refuse than to debug.
+		for (const output of outputs) {
+			if (!/\$\{item\./.test(output)) {
+				throw new PipelineError(
+					`${ctx.at(["steps", index, "output"])}: a foreach output must reference \${item.*} ` +
+						`(e.g. analysis/\${item.id}.md), or every item would write to "${output}"`,
+				);
+			}
+		}
+
+		const foreachStep: ForeachStepSpec = {
+			kind: "foreach",
+			id,
+			source,
+			agent,
+			outputs,
+			concurrency,
+			...(input !== undefined ? { input } : {}),
+			...(model !== undefined ? { model } : {}),
+			...(maxTurns !== undefined ? { maxTurns } : {}),
+			...(timeoutMs !== undefined ? { timeoutMs } : {}),
+			...(maxFailures !== undefined ? { maxFailures } : {}),
+		};
+		return foreachStep;
+	}
+
 	const agentStep: AgentStepSpec = {
 		kind: "agent",
 		id,
@@ -228,7 +269,7 @@ function validateReferences(spec: PipelineSpec, ctx: Context, registry?: AgentRe
 	const producedBy = new Map<string, number>();
 
 	for (const [index, step] of spec.steps.entries()) {
-		if (step.kind === "agent" && registry !== undefined && !registry.has(step.agent)) {
+		if (step.kind !== "builtin" && registry !== undefined && !registry.has(step.agent)) {
 			throw new PipelineError(
 				`${ctx.at(["steps", index, "agent"])}: unknown agent "${step.agent}". ` +
 					`Known agents: ${registry.names().join(", ") || "(none found)"}`,
@@ -236,13 +277,17 @@ function validateReferences(spec: PipelineSpec, ctx: Context, registry?: AgentRe
 		}
 
 		const scope = new Set(["output", "workspace", "runId"]);
+		// A fan-out step's own templates may reference the current item. The exact
+		// field set depends on the source and is only known at run time, so any
+		// `item.*` reference is accepted here and resolved per item later.
+		const allowsItem = step.kind === "foreach";
 		for (const key of Object.keys(spec.vars)) scope.add(`vars.${key}`);
 		for (const [earlier, earlierIndex] of producedBy) {
 			if (earlierIndex < index) scope.add(`steps.${earlier}.outputs`);
 		}
 
 		const templates = [
-			...(step.kind === "agent" && step.input !== undefined ? [step.input] : []),
+			...(step.kind !== "builtin" && step.input !== undefined ? [step.input] : []),
 			...step.outputs,
 			...(step.kind === "builtin" ? Object.values(step.with).filter(isString) : []),
 		];
@@ -250,6 +295,7 @@ function validateReferences(spec: PipelineSpec, ctx: Context, registry?: AgentRe
 		for (const template of templates) {
 			for (const reference of placeholders(template)) {
 				if (scope.has(reference)) continue;
+				if (allowsItem && reference.startsWith("item.")) continue;
 				throw new PipelineError(
 					`${ctx.at(["steps", index])}: step "${step.id}" references \${${reference}}, ` +
 						`which is not in scope. Available: ${[...scope].sort().join(", ")}`,
@@ -259,6 +305,30 @@ function validateReferences(spec: PipelineSpec, ctx: Context, registry?: AgentRe
 
 		producedBy.set(step.id, index);
 	}
+}
+
+function readForeachSource(raw: unknown, at: Path, ctx: Context): ForeachSource {
+	if (typeof raw === "string") return { kind: "glob", pattern: raw };
+	if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+		throw new PipelineError(`${ctx.at(at)}: "foreach" must be a glob string or a mapping`);
+	}
+	const source = raw as Record<string, unknown>;
+
+	if (typeof source["glob"] === "string") return { kind: "glob", pattern: source["glob"] };
+	if (typeof source["json"] === "string") {
+		const jsonPath = source["path"];
+		return {
+			kind: "json",
+			file: source["json"],
+			...(typeof jsonPath === "string" ? { path: jsonPath } : {}),
+		};
+	}
+	if (Array.isArray(source["items"])) {
+		return { kind: "items", values: source["items"] as Array<Record<string, unknown>> };
+	}
+	throw new PipelineError(
+		`${ctx.at(at)}: "foreach" needs one of glob, json, or items`,
+	);
 }
 
 function resolveModelRef(

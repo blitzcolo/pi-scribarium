@@ -16,6 +16,15 @@ export const PIPELINE_VERSION = 1;
 
 export type StepKind = "agent" | "builtin" | "foreach" | "gate";
 
+/** Fields exposed to templates for each fan-out item. */
+export interface ForeachItem {
+	id: string;
+	index: number;
+	path?: string;
+	stem?: string;
+	[key: string]: unknown;
+}
+
 export interface AgentStepSpec {
 	kind: "agent";
 	id: string;
@@ -41,7 +50,30 @@ export interface BuiltinStepSpec {
 	outputs: string[];
 }
 
-export type StepSpec = AgentStepSpec | BuiltinStepSpec;
+/** Where a fan-out gets its items. Exactly one field is set. */
+export type ForeachSource =
+	| { kind: "glob"; pattern: string }
+	| { kind: "json"; file: string; path?: string }
+	| { kind: "items"; values: Array<Record<string, unknown>> };
+
+export interface ForeachStepSpec {
+	kind: "foreach";
+	id: string;
+	source: ForeachSource;
+	/** The agent run once per item. */
+	agent: string;
+	input?: string;
+	/** Must reference ${item.*}; enforced at load time. */
+	outputs: string[];
+	model?: string;
+	maxTurns?: number;
+	timeoutMs?: number;
+	concurrency: number;
+	/** Stop scheduling after this many item failures. Unset means isolate all. */
+	maxFailures?: number;
+}
+
+export type StepSpec = AgentStepSpec | BuiltinStepSpec | ForeachStepSpec;
 
 export interface PipelineDefaults {
 	model?: string;

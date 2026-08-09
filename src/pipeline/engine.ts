@@ -16,8 +16,10 @@ import {
 	type StepState,
 } from "../workspace/run-state.js";
 import { runBuiltin } from "./builtins.js";
+import { resolveItems } from "./items.js";
+import { mapPool } from "./pool.js";
 import { interpolate, type TemplateScope } from "./template.js";
-import type { AgentStepSpec, PipelineSpec, StepSpec } from "./schema.js";
+import type { AgentStepSpec, ForeachItem, ForeachStepSpec, PipelineSpec, StepSpec } from "./schema.js";
 
 export interface RunPipelineOptions {
 	spec: PipelineSpec;
@@ -36,7 +38,17 @@ export type PipelineEvent =
 	| { type: "step_start"; stepId: string; index: number; total: number; kind: string }
 	| { type: "step_end"; stepId: string; status: StepState["status"]; error?: string }
 	| { type: "log"; message: string }
-	| { type: "stage"; stepId: string; event: StageEvent };
+	| { type: "fanout_start"; stepId: string; total: number; concurrency: number }
+	| {
+			type: "fanout_progress";
+			stepId: string;
+			itemId: string;
+			completed: number;
+			failed: number;
+			total: number;
+			error?: string;
+	  }
+	| { type: "stage"; stepId: string; itemId?: string; event: StageEvent };
 
 /**
  * Execute a pipeline in order.
@@ -79,6 +91,8 @@ export async function runPipeline(options: RunPipelineOptions): Promise<RunState
 		try {
 			if (step.kind === "builtin") {
 				await executeBuiltin(step, stepState, options);
+			} else if (step.kind === "foreach") {
+				await executeForeach(step, stepState, options, state, store);
 			} else {
 				await executeAgent(step, stepState, options, state);
 			}
@@ -142,24 +156,37 @@ async function executeBuiltin(
 	options.onEvent?.({ type: "log", message: result.summary });
 }
 
-async function executeAgent(
-	step: AgentStepSpec,
-	stepState: StepState,
+/** Template scope shared by every stage in a step. */
+function baseScope(
 	options: RunPipelineOptions,
 	state: RunState,
-): Promise<void> {
-	const { spec, layout, registry, modelRuntime } = options;
-	const agent = registry.get(step.agent);
-
-	const scope: TemplateScope = {
+	item?: ForeachItem,
+): TemplateScope {
+	const { spec, layout } = options;
+	return {
 		vars: spec.vars,
 		workspace: layout.workspace,
 		runId: layout.runId,
 		steps: Object.fromEntries(
 			Object.entries(state.steps).map(([id, value]) => [id, { outputs: value.outputs }]),
 		),
-		...(step.outputs.length > 0 ? { output: step.outputs.join(", ") } : {}),
+		...(item !== undefined ? { item } : {}),
 	};
+}
+
+/**
+ * Run one agent stage and record it. Shared by plain agent steps and by each
+ * item of a fan-out, so both get the same output contract and failure handling.
+ */
+async function runOneStage(
+	step: AgentStepSpec | ForeachStepSpec,
+	options: RunPipelineOptions,
+	state: RunState,
+	item?: ForeachItem,
+): Promise<{ outputs: string[]; result: RunStageResult; error?: StepState["error"] }> {
+	const { layout, registry, modelRuntime } = options;
+	const agent = registry.get(step.agent);
+	const scope = baseScope(options, state, item);
 
 	const outputs = step.outputs.map((template) => interpolate(template, scope));
 	const scopeWithOutputs: TemplateScope = {
@@ -168,7 +195,8 @@ async function executeAgent(
 	};
 	const task = buildTask(step, outputs, scopeWithOutputs);
 
-	fs.writeFileSync(layout.logFile(step.id), `# ${step.id}\n\n## Prompt\n\n${task}\n`, "utf-8");
+	const logFile = layout.logFile(step.id, item?.id);
+	fs.writeFileSync(logFile, `# ${step.id}${item === undefined ? "" : ` / ${item.id}`}\n\n## Prompt\n\n${task}\n`, "utf-8");
 
 	// Stages run with the workspace as cwd so a prompt can name corpus/text/x.md
 	// and analysis/x.md naturally. Parent directories are created up front: an
@@ -192,20 +220,17 @@ async function executeAgent(
 		...(modelRef !== undefined ? { defaultModelRef: modelRef } : {}),
 		...(options.defaultThinking !== undefined ? { defaultThinking: options.defaultThinking } : {}),
 		...(options.signal !== undefined ? { signal: options.signal } : {}),
-		onEvent: (event) => options.onEvent?.({ type: "stage", stepId: step.id, event }),
+		onEvent: (event) => options.onEvent?.({ type: "stage", stepId: step.id, event, ...(item !== undefined ? { itemId: item.id } : {}) }),
 	});
 
-	stepState.turns = result.turns;
-	stepState.usage = result.usage;
-	if (modelRef !== undefined) stepState.model = modelRef;
-	if (result.sessionFile !== undefined) stepState.sessionFile = result.sessionFile;
-
-	fs.appendFileSync(layout.logFile(step.id), `\n## Final text\n\n${result.text}\n`, "utf-8");
+	fs.appendFileSync(logFile, `\n## Final text\n\n${result.text}\n`, "utf-8");
 
 	if (result.status !== "completed") {
-		stepState.status = result.status === "aborted" ? "failed" : "failed";
-		stepState.error = result.error ?? { code: "AGENT_ERROR", message: "stage did not complete" };
-		return;
+		return {
+			outputs,
+			result,
+			error: result.error ?? { code: "AGENT_ERROR", message: "stage did not complete" },
+		};
 	}
 
 	// The declared outputs are the real contract. getLastAssistantText() is
@@ -213,19 +238,154 @@ async function executeAgent(
 	// one that talks about writing a file without writing it must not pass.
 	const missing = outputs.filter((output) => !fs.existsSync(layout.artifact(output)));
 	if (missing.length > 0) {
-		stepState.status = "failed";
-		stepState.error = {
-			code: "MISSING_OUTPUT",
-			message: `declared output(s) not written: ${missing.join(", ")}`,
+		return {
+			outputs,
+			result,
+			error: {
+				code: "MISSING_OUTPUT",
+				message: `declared output(s) not written: ${missing.join(", ")}`,
+			},
 		};
-		return;
 	}
 
+	return { outputs, result };
+}
+
+async function executeAgent(
+	step: AgentStepSpec,
+	stepState: StepState,
+	options: RunPipelineOptions,
+	state: RunState,
+): Promise<void> {
+	const { outputs, result, error } = await runOneStage(step, options, state);
+
+	stepState.turns = result.turns;
+	stepState.usage = result.usage;
+	if (result.sessionFile !== undefined) stepState.sessionFile = result.sessionFile;
+
+	if (error !== undefined) {
+		stepState.status = "failed";
+		stepState.error = error;
+		return;
+	}
 	stepState.outputs = outputs;
 	stepState.status = "completed";
 }
 
-function buildTask(step: AgentStepSpec, outputs: string[], scope: TemplateScope): string {
+/**
+ * Fan out one agent over many items.
+ *
+ * Each item gets its own session, its own artifact path, and its own entry in
+ * `status.json` written the moment it settles — a kill loses at most the items
+ * still in flight. A failing item is recorded and the rest continue: the whole
+ * point of analysing thirty papers concurrently is that one unreadable file
+ * must not discard the twenty-nine already paid for.
+ */
+async function executeForeach(
+	step: ForeachStepSpec,
+	stepState: StepState,
+	options: RunPipelineOptions,
+	state: RunState,
+	store: RunStateStore,
+): Promise<void> {
+	const items = resolveItems(step.source, options.layout.workspace);
+	stepState.items = {};
+
+	if (items.length === 0) {
+		stepState.status = "failed";
+		stepState.error = { code: "BUILTIN_ERROR", message: "fan-out matched no items" };
+		return;
+	}
+
+	options.onEvent?.({
+		type: "fanout_start",
+		stepId: step.id,
+		total: items.length,
+		concurrency: Math.min(step.concurrency, items.length),
+	});
+
+	let usage = emptyUsage();
+	let turns = 0;
+	let completed = 0;
+	let failed = 0;
+
+	const settled = await mapPool(
+		items,
+		step.concurrency,
+		async (item) => await runOneStage(step, options, state, item),
+		{
+			...(step.maxFailures !== undefined ? { maxFailures: step.maxFailures } : {}),
+			...(options.signal !== undefined ? { signal: options.signal } : {}),
+			onSettled: (index, outcome) => {
+				const item = items[index] as ForeachItem;
+				const entry =
+					outcome.ok && outcome.value.error === undefined
+						? { status: "completed" as const, outputs: outcome.value.outputs }
+						: {
+								status: "failed" as const,
+								error: outcome.ok
+									? (outcome.value.error ?? { code: "AGENT_ERROR" as const, message: "failed" })
+									: { code: "AGENT_ERROR" as const, message: outcome.error.message },
+							};
+
+				if (outcome.ok) {
+					usage = addUsage(usage, outcome.value.result.usage);
+					turns += outcome.value.result.turns;
+				}
+				if (entry.status === "completed") completed++;
+				else failed++;
+
+				(stepState.items ??= {})[item.id] = entry;
+				stepState.usage = usage;
+				// Turns are per item; the step reports their sum, not zero.
+				stepState.turns = turns;
+				// Checkpoint per item so a kill costs at most the in-flight work.
+				store.save(state);
+
+				options.onEvent?.({
+					type: "fanout_progress",
+					stepId: step.id,
+					itemId: item.id,
+					completed,
+					failed,
+					total: items.length,
+					...(entry.status === "failed" ? { error: entry.error.message } : {}),
+				});
+			},
+		},
+	);
+
+	stepState.usage = usage;
+	stepState.turns = turns;
+	stepState.outputs = settled.flatMap((outcome) =>
+		outcome.ok && outcome.value.error === undefined ? outcome.value.outputs : [],
+	);
+
+	if (failed === 0) {
+		stepState.status = "completed";
+		return;
+	}
+
+	// A partial fan-out still counts as completed when a failure budget was not
+	// exceeded: the reducer downstream is told what is missing and can say so.
+	// Only an exhausted budget, or losing everything, stops the run.
+	const budgetExhausted = step.maxFailures !== undefined && failed >= step.maxFailures;
+	if (completed === 0 || budgetExhausted) {
+		stepState.status = "failed";
+		stepState.error = {
+			code: "AGENT_ERROR",
+			message: `${failed} of ${items.length} items failed${budgetExhausted ? " (max_failures reached)" : ""}`,
+		};
+		return;
+	}
+	stepState.status = "completed";
+}
+
+function buildTask(
+	step: AgentStepSpec | ForeachStepSpec,
+	outputs: string[],
+	scope: TemplateScope,
+): string {
 	const parts: string[] = [];
 	if (step.input !== undefined) parts.push(interpolate(step.input, scope));
 
