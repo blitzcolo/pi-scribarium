@@ -3,7 +3,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { collectCorpusInputs, ingestCorpus, slugify } from "../../src/ingest/pdf.js";
+import {
+	collectCorpusInputs,
+	ingestCorpus,
+	parseExtensionFilter,
+	slugify,
+} from "../../src/ingest/pdf.js";
 import { minimalPdf } from "../helpers/minimal-pdf.js";
 
 let root: string;
@@ -159,6 +164,43 @@ describe("collectCorpusInputs", () => {
 
 	it("ignores paths that do not exist", () => {
 		expect(collectCorpusInputs([path.join(root, "nope")])).toEqual([]);
+	});
+
+	// source/ extracts PDFs only. Copying the author's Markdown into
+	// source/text/ as well would put the same material in front of a writing
+	// agent twice, once at each path.
+	it("narrows a directory scan to the requested extensions", () => {
+		fs.writeFileSync(path.join(corpus, "results.pdf"), minimalPdf(["R"]));
+		fs.writeFileSync(path.join(corpus, "notes.md"), "notes");
+		fs.writeFileSync(path.join(corpus, "draft.tex"), "draft");
+
+		expect(
+			collectCorpusInputs([corpus], new Set([".pdf"])).map((p) => path.basename(p)),
+		).toEqual(["results.pdf"]);
+	});
+
+	it("still passes an explicitly named file through unfiltered", () => {
+		// So an unsupported extension fails with a per-file reason rather than
+		// vanishing into "no documents found".
+		const odd = path.join(corpus, "notes.docx");
+		fs.writeFileSync(odd, "x");
+
+		expect(collectCorpusInputs([odd])).toEqual([odd]);
+	});
+});
+
+describe("parseExtensionFilter", () => {
+	it.each([
+		["pdf", [".pdf"]],
+		[".pdf", [".pdf"]],
+		["pdf, md", [".pdf", ".md"]],
+		[["pdf", ".tex"], [".pdf", ".tex"]],
+	])("parses %j", (input, expected) => {
+		expect([...(parseExtensionFilter(input) ?? [])]).toEqual(expected);
+	});
+
+	it.each([undefined, "", "  ,  ", 7])("treats %j as no filter", (input) => {
+		expect(parseExtensionFilter(input)).toBeUndefined();
 	});
 });
 

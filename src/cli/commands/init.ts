@@ -9,7 +9,13 @@ import { UsageError } from "../../util/errors.js";
  *
  * A workspace is one paper. Everything the pipeline needs is a file you put
  * there yourself: the tool has no network access, and the citation-integrity
- * story depends on every reference tracing back to a document in `corpus/`.
+ * story depends on every reference tracing back to a document you supplied.
+ *
+ * Three input directories, because they are read for three different reasons.
+ * `corpus/` alone defines the venue's norms; folding cited literature into it
+ * would distort the structure and evidence bar every later stage is written
+ * against, and folding it into `source/` would present other people's results
+ * as the author's.
  */
 export function commandInit(target: string, force: boolean): number {
 	const root = path.resolve(target);
@@ -21,11 +27,12 @@ export function commandInit(target: string, force: boolean): number {
 		);
 	}
 
-	for (const dir of ["corpus", "source"]) {
+	for (const dir of ["corpus", "references", "source"]) {
 		fs.mkdirSync(path.join(root, dir), { recursive: true });
 	}
 
 	writeIfAbsent(path.join(root, "corpus", "_README.md"), CORPUS_README, force);
+	writeIfAbsent(path.join(root, "references", "_README.md"), REFERENCES_README, force);
 	writeIfAbsent(path.join(root, "source", "_README.md"), SOURCE_README, force);
 	writeIfAbsent(path.join(root, "README.md"), workspaceReadme(path.basename(root)), force);
 
@@ -37,13 +44,17 @@ export function commandInit(target: string, force: boolean): number {
 
 	process.stdout.write(
 		`Created workspace ${root}\n\n` +
-			"  corpus/    put the target journal's papers here (.pdf, .md, .txt, .tex)\n" +
-			"  source/    put your own material here: notes, results, an existing draft\n" +
+			"  corpus/      the target venue's papers — what its norms are learned from\n" +
+			"  references/  other domain literature — citable, but never profiled\n" +
+			"  source/      your own notes, results, an existing draft\n" +
 			"  pipeline.yaml\n\n" +
 			"Next:\n" +
-			`  1. copy 10-30 papers from your target journal into ${path.join(root, "corpus")}\n` +
+			`  1. copy 10-30 papers from your target venue into ${path.join(root, "corpus")}\n` +
 			`  2. put your own notes and results into ${path.join(root, "source")}\n` +
-			`  3. scribarium run --workspace ${root} --var topic="..."\n`,
+			`  3. scribarium run --workspace ${root} --var topic="..."\n\n` +
+			"Keep corpus/ to one venue. It is where the expected structure, length, and\n" +
+			"evidence bar are inferred from, and a paper from elsewhere skews all three.\n" +
+			`Relevant work published elsewhere belongs in ${path.join(root, "references")}.\n`,
 	);
 	return 0;
 }
@@ -69,12 +80,33 @@ Nothing here is downloaded for you. The tool has no network access, and that is
 deliberate: every citation it produces must trace back to a file you put here.
 `;
 
+const REFERENCES_README = `# references/
+
+**Domain literature published somewhere other than your target venue.** Work you
+want to cite, build on, or argue against.
+
+- Formats: \`.pdf\`, \`.md\`, \`.txt\`, \`.tex\`
+- Extracted to \`references/text/\` and indexed by the citation checker, so
+  anything here can be cited and will verify.
+- **Not** read by the journal profiler. That is the whole point of this
+  directory: a paper from the wrong venue would distort the expected structure,
+  length, and evidence bar that every later stage is written against.
+
+Put a paper here when it is relevant to your topic but was not published where
+you are submitting. Put it in \`corpus/\` only if it was.
+`;
+
 const SOURCE_README = `# source/
 
 **Your own material.** Notes, results, figures described in text, an existing
 draft, a related manuscript — anything the outline should be built from.
 
+Only your own work belongs here. Its claims and results are written as yours;
+other people's papers go in \`references/\`.
+
 - Formats: \`.pdf\`, \`.md\`, \`.txt\`, \`.tex\`
+- PDFs are extracted to \`source/text/\`, because the agents cannot read PDF
+  bytes. Files that are already text are read where they are.
 - If you have no results yet, that is fine: the outliner marks each place
   evidence is needed with \`EVIDENCE NEEDED\` rather than inventing findings.
   Those markers are the point — they tell you what is still missing.
@@ -89,8 +121,12 @@ A pi-scribarium workspace. One workspace is one paper.
 
 | Directory | What goes in it |
 |---|---|
-| \`corpus/\` | Papers from your target journal, to learn its norms from |
+| \`corpus/\` | Papers from your target venue, to learn its norms from |
+| \`references/\` | Domain literature published elsewhere — citable, not profiled |
 | \`source/\` | Your own notes, results, and drafts |
+
+Keep \`corpus/\` to a single venue. Relevant work from anywhere else goes in
+\`references/\`, where it can be cited without skewing the profile.
 
 ## Run it
 
@@ -111,6 +147,8 @@ scribarium resume
 | Path | What it is |
 |---|---|
 | \`corpus/text/\` | Extracted text, cached between runs |
+| \`references/text/\` | The same, for cited literature |
+| \`source/text/\` | The same, for your own PDFs |
 | \`analysis/papers/\` | One analysis per corpus paper |
 | \`analysis/journal-profile.md\` | What this venue expects |
 | \`outline/outline.md\` | The manuscript outline |

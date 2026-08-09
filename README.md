@@ -19,6 +19,10 @@ ingest ─▶ analyze ─▶ profile ─▶ outline ─▶ [approve] ─▶ writ
                           code                       you
 ```
 
+Only `corpus/` reaches `profile`. `references/` and `source/` join at `outline`,
+so literature you cite and results you report cannot distort what the tool
+believes your target venue expects.
+
 Each stage runs as an **isolated agent session**. Stages share nothing but files
 on disk, so a thirty-paper corpus never has to fit in one context window, and one
 unreadable PDF cannot discard the analyses you already paid for.
@@ -44,8 +48,9 @@ npm install -g pi-scribarium
 scribarium init my-paper
 cd my-paper
 
-# corpus/  ← 10-30 papers from your target journal (.pdf .md .txt .tex)
-# source/  ← your own notes, results, drafts
+# corpus/      ← 10-30 papers from your target venue (.pdf .md .txt .tex)
+# references/  ← relevant work published elsewhere; citable, never profiled
+# source/      ← your own notes, results, drafts
 
 scribarium validate    # credentials and models resolve?
 scribarium ingest      # extract text; free, no model calls
@@ -65,11 +70,28 @@ scribarium approve && scribarium resume  # continues to a full draft
 | Directory | Contents | Purpose |
 |---|---|---|
 | `corpus/` | Papers **from your target venue** | Learn its structure, evidence bar, and citation practice |
+| `references/` | Domain literature published **elsewhere** | Citable, and deliberately not profiled |
 | `source/` | **Your** notes, results, drafts | The content of your paper |
 
 Two corpus papers are enough to run and not enough to generalise from; the
 profile will say so. Aim for 10–30. Scanned PDFs with no text layer are reported
 as needing OCR rather than silently analysed as empty.
+
+**Keep `corpus/` to one venue.** The profiler reports norms as ratios — "12/14
+use first person plural in the methods" — over whatever is in that directory. It
+has no way to tell that four of the papers came from somewhere else, so mixing
+venues does not produce the target venue's norms with some noise; it produces a
+venue that does not exist, stated with the same confidence. Page limits, section
+skeletons, and evidence expectations differ enough between venues that averaging
+them yields an outline that fits none of them.
+
+Work that is relevant but published elsewhere goes in `references/`. It is
+extracted, readable by the writing agents, and indexed by the citation checker —
+so you can cite it and it will verify — but the profiler never sees it.
+
+PDFs in all three directories are extracted to a `text/` subdirectory, because
+the agents cannot read PDF bytes. In `source/` only PDFs are extracted; files
+that are already text are read where they are.
 
 If you have no results yet, run it anyway. Every place evidence is required is
 marked `EVIDENCE NEEDED`, and the final citation report collects those markers
@@ -148,9 +170,11 @@ The last stage is deterministic code, not an agent:
 - line 42: RMSE against the LBLRTM baseline
 ```
 
-A citation is unsupported when nothing in `corpus/`, `analysis/`, or `source/`
-mentions it — either it was invented, or the paper it refers to is missing from
-your workspace. Both need your attention, and both fail the run. Markers never
+A citation is unsupported when nothing in `corpus/`, `references/`, `analysis/`,
+or `source/` mentions it — either it was invented, or the paper it refers to is
+missing from your workspace. Both need your attention, and both fail the run. If
+a real citation is being reported as unsupported, the paper belongs in
+`references/`. Markers never
 fail it: they are your declared to-do list, and failing on them would punish the
 honesty the writing agents are built to encourage.
 
@@ -192,6 +216,10 @@ vars:
 steps:
   - id: ingest                          # deterministic, no model
     builtin: ingest
+    with:
+      from: corpus                      # default
+      only: pdf                         # optional: restrict by extension
+      optional: true                    # an empty directory is not a failure
 
   - id: analyze                         # fan-out: one session per item
     agent: corpus-analyst

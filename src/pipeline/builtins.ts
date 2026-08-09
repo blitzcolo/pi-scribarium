@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 import { checkCitations, formatCitationReport, type CitationReport } from "../checks/citations.js";
-import { collectCorpusInputs, ingestCorpus } from "../ingest/pdf.js";
+import { collectCorpusInputs, ingestCorpus, parseExtensionFilter } from "../ingest/pdf.js";
 import type { BuiltinStepSpec } from "./schema.js";
 
 export interface BuiltinContext {
@@ -166,6 +166,12 @@ SECTION MISSING: ${id} was not drafted.`);
 async function runIngest(step: BuiltinStepSpec, ctx: BuiltinContext): Promise<BuiltinResult> {
 	const from = typeof step.with["from"] === "string" ? step.with["from"] : "corpus";
 	const force = step.with["force"] === true;
+	// `optional` is for directories the author may legitimately leave empty —
+	// references/ when they have none, source/ when their material is all
+	// Markdown. An empty corpus/ is still a hard failure: there is nothing to
+	// profile a venue from.
+	const optional = step.with["optional"] === true;
+	const only = parseExtensionFilter(step.with["only"]);
 
 	const sourceDir = path.resolve(ctx.workspace, from);
 	// Ingest writes into the workspace rather than the run's artifact directory:
@@ -176,12 +182,16 @@ async function runIngest(step: BuiltinStepSpec, ctx: BuiltinContext): Promise<Bu
 		typeof step.with["out"] === "string" ? step.with["out"] : path.join(from, "text"),
 	);
 
-	const inputs = collectCorpusInputs([sourceDir]);
+	const inputs = collectCorpusInputs([sourceDir], only);
 	if (inputs.length === 0) {
+		const wanted = only === undefined ? ".pdf, .md, .txt, or .tex" : [...only].join(", ");
+		if (optional) {
+			return { ok: true, summary: `no ${wanted} files under ${from}/ — nothing to extract` };
+		}
 		return {
 			ok: false,
 			summary: "no source documents found",
-			error: `No .pdf, .md, .txt, or .tex files found under ${sourceDir}`,
+			error: `No ${wanted} files found under ${sourceDir}`,
 		};
 	}
 

@@ -234,8 +234,23 @@ function uniqueSlug(slug: string, used: Map<string, number>): string {
 	return `${slug}-${seen + 1}`;
 }
 
-/** Expand a list of files and directories into concrete source documents. */
-export function collectCorpusInputs(paths: readonly string[]): string[] {
+/**
+ * Expand a list of files and directories into concrete source documents.
+ *
+ * `only` narrows the accepted extensions. `source/` uses it to extract PDFs
+ * without also copying the author's Markdown into `source/text/`: those files
+ * are already readable where they are, and duplicating them would put the same
+ * material in front of a writing agent twice.
+ */
+export function collectCorpusInputs(
+	paths: readonly string[],
+	only?: ReadonlySet<string>,
+): string[] {
+	const accepts = (extension: string): boolean =>
+		only !== undefined
+			? only.has(extension)
+			: extension === ".pdf" || TEXT_EXTENSIONS.has(extension);
+
 	const found: string[] = [];
 	for (const entry of paths) {
 		let stats: fs.Stats;
@@ -248,14 +263,34 @@ export function collectCorpusInputs(paths: readonly string[]): string[] {
 			for (const child of fs.readdirSync(entry, { withFileTypes: true })) {
 				if (!child.isFile()) continue;
 				if (isNotADocument(child.name)) continue;
-				const extension = path.extname(child.name).toLowerCase();
-				if (extension === ".pdf" || TEXT_EXTENSIONS.has(extension)) {
+				if (accepts(path.extname(child.name).toLowerCase())) {
 					found.push(path.join(entry, child.name));
 				}
 			}
-		} else {
+		} else if (only === undefined || only.has(path.extname(entry).toLowerCase())) {
+			// A file named explicitly is passed through even when unsupported, so
+			// it fails with "unsupported extension .docx" rather than vanishing
+			// into "no documents found".
 			found.push(entry);
 		}
 	}
 	return found.sort();
+}
+
+/** Parse an `only:` value — `pdf`, `.pdf`, `pdf, md`, or a YAML list. */
+export function parseExtensionFilter(value: unknown): ReadonlySet<string> | undefined {
+	const raw = Array.isArray(value)
+		? value.map(String)
+		: typeof value === "string"
+			? value.split(",")
+			: undefined;
+	if (raw === undefined) return undefined;
+
+	const set = new Set(
+		raw
+			.map((entry) => entry.trim().toLowerCase())
+			.filter((entry) => entry.length > 0)
+			.map((entry) => (entry.startsWith(".") ? entry : `.${entry}`)),
+	);
+	return set.size > 0 ? set : undefined;
 }

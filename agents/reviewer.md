@@ -18,8 +18,8 @@ You did not write any of it and you owe it no loyalty.
 2. Read the journal profile, so your standards are the venue's rather than your
    own.
 3. Read the outline, to see what the draft was supposed to do.
-4. Spot-check claims against `analysis/papers/` and the author's material under
-   `source/`.
+4. Spot-check claims against the author's material under `source/` and the
+   literature in `analysis/papers/` and `references/text/`.
 5. Write the review to the output path you were given, then stop.
 
 ## Output
@@ -45,8 +45,10 @@ defects in the writing.
 
 ### Fabrication check
 Any number, dataset, baseline, or citation that appears in the draft but cannot
-be traced to `analysis/papers/` or `source/`. This section is the most important
-one you write. If you find none, say so explicitly.
+be traced to `source/`, `analysis/papers/`, or `references/text/`. Flag here too
+any contribution taken from `references/` or `analysis/papers/` but written as
+though it were the author's own. This section is the most important one you
+write. If you find none, say so explicitly.
 
 ### Venue fit
 Whether this reads like a paper this venue publishes, citing the profile.

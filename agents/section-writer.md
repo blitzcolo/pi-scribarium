@@ -18,8 +18,11 @@ them. Follow it.
    must believe entering and leaving.
 2. Read the journal profile. It tells you the expected length, voice, tense, and
    citation practice for this venue.
-3. Read the author's material under `source/` for anything your section needs.
-4. Write the section to the output path you were given, then stop.
+3. Read the author's material under `source/` (extracted PDFs are in
+   `source/text/`) for anything your section needs.
+4. Read the literature you may draw on: `analysis/papers/` for the target
+   venue's papers, and `references/text/` for other domain work, if present.
+5. Write the section to the output path you were given, then stop.
 
 ## Output
 
@@ -37,9 +40,14 @@ These matter more than fluency:
   with honest gaps is useful; a section with plausible fabrications is worse than
   nothing, because the fabrication is what survives into submission.
 - **Cite only what exists.** You may cite a paper only if it appears in
-  `analysis/papers/` or in the author's own material. Write citations as
-  `[Author Year]`. If you want to cite something that is not there, write
-  `CITATION NEEDED: <the claim>` instead.
+  `analysis/papers/`, `references/text/`, or the author's own material. Write
+  citations as `[Author Year]`. If you want to cite something that is not there,
+  write `CITATION NEEDED: <the claim>` instead.
+- **Know whose work is whose.** `source/` is the author's own — its claims,
+  results, and figures are theirs to present. `references/` and
+  `analysis/papers/` are other people's published work: cite them, contrast with
+  them, build on them, but never write their contributions as the author's. This
+  is the difference between a related-work paragraph and plagiarism.
 - **Stay inside your section.** Do not write neighbouring sections, do not
   restate their content, and do not add headings the outline does not list.
 - **Match the venue, not your instincts.** If the profile says this venue uses

@@ -35,7 +35,7 @@ Commands:
   events [runId]            Append-only log of what happened
   agents                    List discovered agent definitions
   validate                  Check every agent's model reference and credentials
-  ingest <paths...>         Convert a PDF/text corpus to Markdown
+  ingest [paths...]         Extract text from corpus/, references/, source/
   run-agent <name>          Run a single agent to completion
   help, version
 
@@ -64,8 +64,11 @@ status / report options:
   --json                    Machine-readable output
 
 ingest options:
-  --out <dir>               Output directory (default: <workspace>/corpus/text)
+  --out <dir>               Output directory; only with explicit paths
   --force                   Re-extract even when the output is current
+
+  With no paths, every input directory is extracted to its own text/ subdir.
+  source/ extracts PDFs only — its text files are read where they are.
 
 run-agent options:
   --input <file>            File whose contents become the task prompt
@@ -282,37 +285,86 @@ async function commandValidate(args: ParsedArgs): Promise<number> {
 	return 0;
 }
 
+/**
+ * Named directories, mirroring the shipped pipeline's ingest steps.
+ *
+ * `source/` extracts PDFs only: its text files are already readable where they
+ * are, and copying them into `source/text/` would show a writing agent the same
+ * material twice.
+ */
+const WORKSPACE_INGESTS: ReadonlyArray<{
+	dir: string;
+	only?: ReadonlySet<string>;
+	required: boolean;
+}> = [
+	{ dir: "corpus", required: true },
+	{ dir: "references", required: false },
+	{ dir: "source", only: new Set([".pdf"]), required: false },
+];
+
 async function commandIngest(args: ParsedArgs): Promise<number> {
 	const { workspace } = resolveContext(args);
-	const targets = args.positionals.length > 0 ? args.positionals : [path.join(workspace, "corpus")];
-	const outDir = path.resolve(flagString(args, "out") ?? path.join(workspace, "corpus", "text"));
+	const force = flagBoolean(args, "force");
 
-	const inputs = collectCorpusInputs(targets.map((t) => path.resolve(workspace, t)));
-	if (inputs.length === 0) {
-		process.stderr.write(`No .pdf, .md, .txt, or .tex files found in ${targets.join(", ")}\n`);
-		return 2;
+	const explicit = args.positionals.length > 0;
+	const targets = explicit
+		? [
+				{
+					inputs: collectCorpusInputs(
+						args.positionals.map((t) => path.resolve(workspace, t)),
+					),
+					outDir: path.resolve(flagString(args, "out") ?? path.join(workspace, "corpus", "text")),
+					label: args.positionals.join(", "),
+					required: true,
+				},
+			]
+		: WORKSPACE_INGESTS.map((entry) => ({
+				inputs: collectCorpusInputs([path.join(workspace, entry.dir)], entry.only),
+				outDir: path.join(workspace, entry.dir, "text"),
+				label: `${entry.dir}/`,
+				required: entry.required,
+			}));
+
+	let failed = 0;
+	let ingested = 0;
+
+	for (const target of targets) {
+		if (target.inputs.length === 0) {
+			if (target.required) {
+				process.stderr.write(`No .pdf, .md, .txt, or .tex files found in ${target.label}\n`);
+				return 2;
+			}
+			continue;
+		}
+
+		if (targets.length > 1) process.stdout.write(`${target.label}\n`);
+
+		const result = await ingestCorpus({
+			inputs: target.inputs,
+			outDir: target.outDir,
+			force,
+			onProgress: (file) => {
+				const label = path.basename(file.sourcePath);
+				if (file.status === "failed") {
+					process.stderr.write(`  fail  ${label}: ${file.error}\n`);
+				} else {
+					const pages = file.totalPages !== undefined ? ` (${file.totalPages}p)` : "";
+					process.stdout.write(`  ${file.status.padEnd(9)} ${label}${pages}\n`);
+				}
+			},
+		});
+
+		failed += result.failed;
+		ingested += result.succeeded;
+		if (targets.length > 1) {
+			process.stdout.write(`  -> ${result.succeeded} in ${path.relative(workspace, target.outDir)}\n`);
+		}
 	}
 
-	const result = await ingestCorpus({
-		inputs,
-		outDir,
-		force: flagBoolean(args, "force"),
-		onProgress: (file) => {
-			const label = path.basename(file.sourcePath);
-			if (file.status === "failed") {
-				process.stderr.write(`  fail  ${label}: ${file.error}\n`);
-			} else {
-				const pages = file.totalPages !== undefined ? ` (${file.totalPages}p)` : "";
-				process.stdout.write(`  ${file.status.padEnd(9)} ${label}${pages}\n`);
-			}
-		},
-	});
-
 	process.stdout.write(
-		`\n${result.succeeded} document(s) ready in ${outDir}` +
-			(result.failed > 0 ? `, ${result.failed} failed\n` : "\n"),
+		`\n${ingested} document(s) ready` + (failed > 0 ? `, ${failed} failed\n` : "\n"),
 	);
-	return result.failed > 0 ? 1 : 0;
+	return failed > 0 ? 1 : 0;
 }
 
 async function commandRunAgent(args: ParsedArgs): Promise<number> {

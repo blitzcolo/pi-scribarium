@@ -32,10 +32,33 @@ vars:
 
 steps:
   # Deterministic: no model, no cost, identical every run.
+  #
+  # Three directories, three roles. Only corpus/ teaches the venue's norms; the
+  # other two exist to be read and cited, and are deliberately kept out of the
+  # profile so a paper from the wrong venue cannot skew what "this venue expects"
+  # means.
   - id: ingest
     builtin: ingest
     with:
       from: corpus
+
+  # Domain literature: citable, never profiled. These are other people's papers,
+  # from wherever they were published.
+  - id: ingest-references
+    builtin: ingest
+    with:
+      from: references
+      optional: true
+
+  # The author's own material. Extraction only — `only: pdf` leaves their
+  # Markdown and LaTeX where it is rather than copying it into source/text/,
+  # which would put the same material in front of a writer twice.
+  - id: ingest-source
+    builtin: ingest
+    with:
+      from: source
+      only: pdf
+      optional: true
 
   # The map half. One session per paper, so a thirty-paper corpus never has to
   # fit in one context window, and a single unreadable file cannot discard the
@@ -73,7 +96,14 @@ steps:
     input: |
       Topic: ${vars.topic}
       Journal profile: ${steps.profile.outputs}
-      The author's own material is under source/ — read all of it first.
+
+      The author's own material is under source/ (extracted PDFs in
+      source/text/) — read all of it first. It is the only place the author's
+      own claims and results come from.
+
+      Domain literature the author may cite is under references/text/, if
+      present. It is other people's published work: cite it, never attribute it
+      to the author.
 
       Produce the outline and the machine-readable section list.
 
@@ -104,7 +134,8 @@ steps:
 
       Outline:         outline/outline.md
       Journal profile: analysis/journal-profile.md
-      Author material: source/
+      Author material: source/ (extracted PDFs in source/text/)
+      Literature:      references/text/ and analysis/papers/
 
       Language: ${vars.language}
     output: draft/${item.id}.md
@@ -146,5 +177,5 @@ steps:
     builtin: check-citations
     with:
       manuscript: final/paper.md
-      sources: [corpus/text, analysis/papers, source]
+      sources: [corpus/text, references/text, analysis/papers, source]
       out: review/citations.md

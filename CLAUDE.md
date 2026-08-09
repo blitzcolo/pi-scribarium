@@ -195,6 +195,30 @@ places; where they disagree, the types and compiled source win.
 Pin `~0.84.1`. pi ships fast and has renamed packages before; `test/sdk-drift.test.ts` asserts these
 APIs still exist. Keep all SDK contact inside `src/runtime/**` so a breaking change touches few files.
 
+## Workspace directories
+
+Three input directories, because they are read for three different reasons. The separation is
+load-bearing, not organisational:
+
+| Directory | Profiled | Citable | Whose work |
+|---|---|---|---|
+| `corpus/` | **yes** | yes | the target venue's |
+| `references/` | no | yes | other people's, published elsewhere |
+| `source/` | no | yes | the author's |
+
+- **Only `corpus/` reaches `profile`.** The profiler states norms as ratios over that directory
+  ("12/14 use first person plural") and has no venue field to filter on, so a paper from elsewhere
+  does not add noise — it moves the reported norm. Page limits and section skeletons differ enough
+  between venues that the average of two is a venue that does not exist.
+- **`references/` exists so relevant-but-wrong-venue work has somewhere to go.** Without it the
+  choice is contaminating the profile or losing the citation.
+- **`source/` is the author's own.** Writing agents may present its claims and results as the
+  author's; `references/` and `analysis/papers/` they may only cite. The reviewer checks both
+  directions.
+- **Ingest is per directory**, into `<dir>/text/`. `source/` uses `only: pdf` — its Markdown and
+  LaTeX are already readable in place, and copying them would show a writer the same material at
+  two paths. `references/` and `source/` are `optional: true`; an empty `corpus/` is still fatal.
+
 ## Fan-out
 
 `foreach` runs one agent per item in its own session — the map half of the
