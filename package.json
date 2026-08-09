@@ -50,5 +50,14 @@
     "@types/node": "^24.0.0",
     "typescript": "^5.9.0",
     "vitest": "^4.0.0"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/blitzcolo/pi-scribarium.git"
+  },
+  "bugs": {
+    "url": "https://github.com/blitzcolo/pi-scribarium/issues"
+  },
+  "homepage": "https://github.com/blitzcolo/pi-scribarium#readme",
+  "author": "blitzcolo"
 }

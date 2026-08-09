@@ -1,0 +1,251 @@
+# pi-scribarium
+
+Multi-agent orchestration for academic writing, built on the
+[Pi Agent SDK](https://www.npmjs.com/package/@earendil-works/pi-coding-agent).
+
+You give it a corpus of papers from the journal you intend to submit to, plus
+your own notes and results. It works out what that venue expects, drafts a
+manuscript against those norms, reviews it as a hostile referee would, and
+verifies that every citation traces back to a document you supplied.
+
+It stops and asks you before the expensive parts.
+
+```
+ingest ─▶ analyze ─▶ profile ─▶ outline ─▶ [approve] ─▶ write ─▶ assemble
+ code     1 session   reduce                  you        1 session   code
+          per paper                                      per section
+                                                                │
+                     check-citations ◀─ polish ◀─ [approve] ◀─ review
+                          code                       you
+```
+
+Each stage runs as an **isolated agent session**. Stages share nothing but files
+on disk, so a thirty-paper corpus never has to fit in one context window, and one
+unreadable PDF cannot discard the analyses you already paid for.
+
+## What it will not do
+
+**It does not search the web or download anything.** You supply every document.
+
+That is deliberate rather than unfinished. The tool's one real guarantee is that
+a citation it writes can be traced to a file in your workspace — a guarantee that
+evaporates the moment it can fetch its own sources. Fabricated references are the
+failure that costs an author their credibility rather than their time, so the
+architecture is built around making them detectable.
+
+## Quickstart
+
+Requires Node >= 22.19 and a configured [pi](https://github.com/badlogic/pi)
+provider.
+
+```bash
+npm install -g pi-scribarium
+
+scholarly init my-paper
+cd my-paper
+
+# corpus/  ← 10-30 papers from your target journal (.pdf .md .txt .tex)
+# source/  ← your own notes, results, drafts
+
+scholarly validate                       # credentials and models resolve?
+scholarly ingest                         # extract text; free, no model calls
+scholarly run --var topic="one sentence describing your paper"
+```
+
+The run halts at the outline for review:
+
+```bash
+scholarly reject -m "Add a limitations section; the evaluation needs a baseline"
+scholarly resume                         # regenerates only the outline
+scholarly approve && scholarly resume    # continues to a full draft
+```
+
+## Preparing your material
+
+| Directory | Contents | Purpose |
+|---|---|---|
+| `corpus/` | Papers **from your target venue** | Learn its structure, evidence bar, and citation practice |
+| `source/` | **Your** notes, results, drafts | The content of your paper |
+
+Two corpus papers are enough to run and not enough to generalise from; the
+profile will say so. Aim for 10–30. Scanned PDFs with no text layer are reported
+as needing OCR rather than silently analysed as empty.
+
+If you have no results yet, run it anyway. Every place evidence is required is
+marked `EVIDENCE NEEDED`, and the final citation report collects those markers
+into a list of what you still have to do.
+
+## Costs
+
+Two dials, set per run:
+
+```bash
+scholarly run \
+  --var bulk=deepseek/deepseek-v4-flash \    # one call per corpus paper
+  --var judgement=anthropic/claude-opus-4-5  # synthesis and writing
+```
+
+`bulk` handles the high-volume mechanical work where a cheap fast model is the
+right trade; `judgement` handles the parts where it is not. Leave either empty to
+use your configured default. A three-paper demo run costs a few cents;
+`scholarly report` breaks it down per stage.
+
+Cost is reported from the SDK's own accounting. Some providers price
+subscription models at zero — the report says so explicitly rather than letting
+`$0.0000` read as "this run was free".
+
+## Language
+
+The manuscript language is stated, not inferred:
+
+```bash
+scholarly run --var language="Write in Simplified Chinese. Keep technical terms,
+                              acronyms, and cited titles in their original English."
+```
+
+It defaults to the corpus language, which is usually right. It matters when your
+corpus and your own material are in different languages — the profiler is told to
+separate language-independent findings (structure, evidence expectations,
+citation density) from sentence-level prose observations, because only the former
+survives a change of language.
+
+## Gates, resume, and revision
+
+A gate stops the run for your decision. On a terminal it prompts; piped to a log
+it writes `runs/<id>/gates/<step>.request.json`, exits **10**, and waits for
+`scholarly approve` or `reject`. The same command therefore works by hand and in
+CI, and an unattended batch never blocks on a prompt nobody can see.
+
+Rejecting rewinds to the step that produced the artifact and re-runs it with your
+feedback and the previous attempt supplied as context. The superseded version is
+archived under `runs/<id>/attempts/`. Regeneration is a fresh session rather than
+a steer — by the time you answer, the original session is gone — which also makes
+it reproducible and puts your words in the transcript.
+
+```bash
+scholarly status              # where a run got to
+scholarly report              # tokens and cost per stage
+scholarly events              # append-only log of what happened
+scholarly redo outline -m ".."  # re-open a finished step when feedback arrives late
+scholarly resume              # continue; completed steps are never re-run
+```
+
+Interrupted runs resume per item: a fan-out killed halfway re-runs only the
+papers it did not finish.
+
+## Citation checking
+
+The last stage is deterministic code, not an agent:
+
+```
+## Unsupported citations
+- [Kowalski 2019] — no document mentions "Kowalski"
+
+## Author's outstanding work
+### EVIDENCE NEEDED (7)
+- line 42: RMSE against the LBLRTM baseline
+```
+
+A citation is unsupported when nothing in `corpus/`, `analysis/`, or `source/`
+mentions it — either it was invented, or the paper it refers to is missing from
+your workspace. Both need your attention, and both fail the run. Markers never
+fail it: they are your declared to-do list, and failing on them would punish the
+honesty the writing agents are built to encourage.
+
+An agent asked to check its own citations can be argued out of a finding, and can
+hallucinate the supporting evidence as readily as it hallucinated the reference.
+Plain string comparison against files on disk cannot.
+
+## Writing your own agents
+
+Agents are Markdown with YAML frontmatter, a strict superset of
+[pi's own subagent format](https://github.com/badlogic/pi) — files move in either
+direction unchanged.
+
+```markdown
+---
+name: methods-writer
+description: Draft the methods section with an emphasis on reproducibility.
+tools: read, grep, find, ls, write     # comma string or YAML list
+model: anthropic/claude-opus-4-5       # optional; provider/model[:thinking]
+max_turns: 30
+---
+
+You draft the methods section...
+```
+
+Discovery, lowest precedence first: shipped → `~/.pi/agent/agents/` →
+`.pi/agents/` → `<workspace>/.scribarium/agents/`. Drop a file with the same
+`name` into your workspace to override a shipped agent.
+
+## Pipeline reference
+
+```yaml
+version: 1
+vars:
+  topic: ""
+  bulk: ""
+  judgement: ""
+
+steps:
+  - id: ingest                          # deterministic, no model
+    builtin: ingest
+
+  - id: analyze                         # fan-out: one session per item
+    agent: corpus-analyst
+    foreach: "corpus/text/*.md"         # or {json: file, path: sections}
+    parallel: 4                         # capped at 8
+    max_failures: 5                     # optional; omit to isolate every failure
+    input: Analyse ${item.path}.
+    output: analysis/papers/${item.id}.md   # must reference ${item.*}
+
+  - id: approve                         # human decision
+    gate: Approve before drafting
+    show: [outline/outline.md]
+    on_reject: outline                  # must be an earlier step
+```
+
+Templates resolve `${vars.*}`, `${item.*}`, `${steps.<id>.outputs}`, `${output}`,
+`${workspace}`, and `${runId}`. Everything is validated before the first model
+call: an unknown agent, an unresolvable reference, or a fan-out output that every
+item would share is a load-time error, not a discovery made twelve papers in.
+
+Exit codes: `0` ok · `1` failed · `2` usage/config · `3` preflight · `10`
+awaiting a gate · `130` interrupted.
+
+## Responsible use
+
+This tool drafts; it does not author. A few things follow from that.
+
+- **You are the author.** You are accountable for every claim, and generated text
+  you have not verified is not something you can defend in review.
+- **Check your venue's policy.** Many journals and conferences require disclosure
+  of AI assistance, and some restrict it. Those policies differ and they change;
+  read the one that applies to you.
+- **`EVIDENCE NEEDED` is not a formality.** It marks a claim with nothing behind
+  it. Shipping a draft with those markers resolved by anything other than real
+  evidence is fabrication regardless of who typed it.
+- **The citation checker proves traceability, not correctness.** It confirms a
+  reference exists in your corpus. Whether it says what you claim it says is
+  still your job.
+
+## Development
+
+```bash
+npm install
+npm run typecheck
+npm test          # no network, no credentials, no cost
+npm run build
+```
+
+Tests run against a scripted in-process provider that replaces only the network
+call, so the agent loop, real tools writing real files, session persistence, and
+usage accounting all execute for real.
+
+`test/integration/sdk-drift.test.ts` asserts the upstream SDK behaviours this
+design depends on. The SDK is pre-1.0 and its documentation contradicts its types
+in several places, so those behaviours are verified rather than trusted.
+
+## Licence
+
+MIT

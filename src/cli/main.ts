@@ -74,6 +74,23 @@ run-agent options:
   --quiet                   Do not stream assistant text to stdout
 `;
 
+/**
+ * Exit quietly when the reader goes away.
+ *
+ * `scholarly agents | head`, or quitting a pager, closes stdout while we are
+ * still writing to it. Node surfaces that as an unhandled EPIPE and crashes with
+ * a stack trace, which looks like a failure of the command rather than the
+ * normal end of a pipeline.
+ */
+function ignoreBrokenPipe(): void {
+	for (const stream of [process.stdout, process.stderr]) {
+		stream.on("error", (error: NodeJS.ErrnoException) => {
+			if (error.code === "EPIPE") process.exit(0);
+			throw error;
+		});
+	}
+}
+
 async function main(argv: readonly string[]): Promise<number> {
 	const args = parseArgs(argv);
 	// Cheap commands are exempt; only the ones that would spend money recurse.
@@ -381,6 +398,8 @@ function formatSummary(result: Awaited<ReturnType<typeof runStage>>): string {
 		.filter((line): line is string => line !== undefined)
 		.join("\n");
 }
+
+ignoreBrokenPipe();
 
 try {
 	process.exitCode = await main(process.argv.slice(2));

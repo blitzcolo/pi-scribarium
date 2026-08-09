@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # The SDK is pre-1.0 and moves fast, so the drift detector runs on a schedule
+  # as well as on changes: upstream can break us without us touching anything.
+  schedule:
+    - cron: "37 6 * * 1"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The SDK requires >=22.19; 24 and 25 are what users will actually have.
+        node: ["22.19", "24", "25"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      # Proves the published tarball actually works, which `npm test` does not:
+      # a missing entry in `files` only shows up after publishing otherwise.
+      - name: Pack and smoke-test the tarball
+        run: |
+          npm pack --silent
+          mkdir -p /tmp/smoke && cd /tmp/smoke
+          npm init -y >/dev/null
+          npm install "$GITHUB_WORKSPACE"/pi-scribarium-*.tgz --silent
+          npx scholarly version
+          npx scholarly agents | grep -q corpus-analyst
+          npx scholarly init ./demo >/dev/null
+          test -f ./demo/pipeline.yaml
