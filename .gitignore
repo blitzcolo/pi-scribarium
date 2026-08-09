@@ -2,6 +2,11 @@
 dist/
 *.tsbuildinfo
 
+# Release tarballs from `npm run release`. The artifact belongs on a GitHub
+# release, not in git history, where it would be a 96 KB binary per version
+# that nothing can ever remove.
+*.tgz
+
 # Dependencies
 node_modules/
 
