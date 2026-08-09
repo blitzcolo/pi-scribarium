@@ -49,6 +49,11 @@ export class UnknownAgentError extends ScribariumError {
 	}
 }
 
+/** The command line was used incorrectly. */
+export class UsageError extends ScribariumError {
+	readonly exitCode = 2;
+}
+
 /** Invalid stage configuration discovered while preparing a run. */
 export class StageConfigError extends ScribariumError {
 	readonly exitCode = 2;
