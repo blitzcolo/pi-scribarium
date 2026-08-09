@@ -1,0 +1,206 @@
+import { describe, expect, it } from "vitest";
+
+import { parseAgentFile } from "../../src/agents/parse.js";
+import { AgentRegistry } from "../../src/agents/registry.js";
+import { parsePipeline, placeholders } from "../../src/pipeline/load.js";
+
+const FILE = "/pipelines/paper.yaml";
+
+function registry(...names: string[]): AgentRegistry {
+	return AgentRegistry.fromDefinitions(
+		names.map((name) =>
+			parseAgentFile(
+				`---\nname: ${name}\ndescription: ${name} agent\n---\n\nBody for ${name}.\n`,
+				`/agents/${name}.md`,
+				"shipped",
+			),
+		),
+	);
+}
+
+const MINIMAL = `
+name: demo
+steps:
+  - id: outline
+    agent: outliner
+    input: Write an outline for \${vars.topic}.
+    output: outline/outline.md
+`;
+
+describe("parsePipeline", () => {
+	it("parses a minimal sequential pipeline", () => {
+		const spec = parsePipeline(`vars:\n  topic: emulation\n${MINIMAL}`, FILE, registry("outliner"));
+
+		expect(spec.name).toBe("demo");
+		expect(spec.vars["topic"]).toBe("emulation");
+		expect(spec.steps).toHaveLength(1);
+		expect(spec.steps[0]?.kind).toBe("agent");
+		expect(spec.steps[0]?.outputs).toEqual(["outline/outline.md"]);
+		// The verbatim source is retained so the run can freeze it for resume.
+		expect(spec.source).toContain("id: outline");
+	});
+
+	it("applies defaults to agent steps and lets a step override them", () => {
+		const spec = parsePipeline(
+			`
+defaults:
+  model: provider/base
+  max_turns: 10
+steps:
+  - id: a
+    agent: outliner
+  - id: b
+    agent: outliner
+    model: provider/special
+    max_turns: 3
+`,
+			FILE,
+			registry("outliner"),
+		);
+
+		expect(spec.steps[0]).toMatchObject({ model: "provider/base", maxTurns: 10 });
+		expect(spec.steps[1]).toMatchObject({ model: "provider/special", maxTurns: 3 });
+	});
+
+	it("parses builtin steps with their options", () => {
+		const spec = parsePipeline(
+			`
+steps:
+  - id: ingest
+    builtin: ingest
+    with:
+      from: corpus
+    output: corpus/text
+`,
+			FILE,
+		);
+
+		expect(spec.steps[0]).toMatchObject({
+			kind: "builtin",
+			run: "ingest",
+			with: { from: "corpus" },
+		});
+	});
+
+	describe("diagnostics", () => {
+		it("reports a YAML syntax error with a position", () => {
+			expect(() => parsePipeline("steps:\n  - id: a\n   bad indent\n", FILE)).toThrow(
+				new RegExp(`${FILE.replace(/\//g, "\\/")}:\\d+:\\d+`),
+			);
+		});
+
+		it("names an unknown agent and lists what is available", () => {
+			expect(() => parsePipeline(MINIMAL, FILE, registry("reviewer"))).toThrow(
+				/unknown agent "outliner"[\s\S]*Known agents: reviewer/,
+			);
+		});
+
+		it("rejects a duplicate step id", () => {
+			const source = `
+steps:
+  - id: dup
+    agent: outliner
+  - id: dup
+    agent: outliner
+`;
+			expect(() => parsePipeline(source, FILE, registry("outliner"))).toThrow(
+				/duplicate step id "dup"/,
+			);
+		});
+
+		it("rejects an unknown step key rather than ignoring it", () => {
+			const source = `
+steps:
+  - id: a
+    agent: outliner
+    tools: read
+`;
+			expect(() => parsePipeline(source, FILE, registry("outliner"))).toThrow(
+				/unknown step key "tools"/,
+			);
+		});
+
+		it("requires exactly one of agent or builtin", () => {
+			expect(() => parsePipeline("steps:\n  - id: a\n", FILE)).toThrow(
+				/must set exactly one of "agent" or "builtin"/,
+			);
+			expect(() =>
+				parsePipeline(
+					"steps:\n  - id: a\n    agent: outliner\n    builtin: ingest\n",
+					FILE,
+					registry("outliner"),
+				),
+			).toThrow(/exactly one/);
+		});
+
+		// A silently skipped gate would let a run sail past an approval the author
+		// explicitly asked for, so unimplemented kinds must fail loudly.
+		it.each([
+			["foreach", "M2"],
+			["gate", "M3"],
+		])("rejects the not-yet-supported %s step", (key, milestone) => {
+			const source = `steps:\n  - id: a\n    agent: outliner\n    ${key}: something\n`;
+			expect(() => parsePipeline(source, FILE, registry("outliner"))).toThrow(
+				new RegExp(`"${key}" is not supported yet \\(planned for ${milestone}\\)`),
+			);
+		});
+
+		it("rejects a placeholder that will never resolve", () => {
+			const source = `
+steps:
+  - id: a
+    agent: outliner
+    input: Use \${vars.missing} please.
+`;
+			expect(() => parsePipeline(source, FILE, registry("outliner"))).toThrow(
+				/references \$\{vars\.missing\}, which is not in scope/,
+			);
+		});
+
+		it("allows referencing an earlier step's outputs but not a later one's", () => {
+			const ok = `
+steps:
+  - id: first
+    agent: outliner
+    output: a.md
+  - id: second
+    agent: outliner
+    input: Read \${steps.first.outputs}.
+`;
+			expect(() => parsePipeline(ok, FILE, registry("outliner"))).not.toThrow();
+
+			const backwards = `
+steps:
+  - id: first
+    agent: outliner
+    input: Read \${steps.second.outputs}.
+  - id: second
+    agent: outliner
+`;
+			expect(() => parsePipeline(backwards, FILE, registry("outliner"))).toThrow(/not in scope/);
+		});
+
+		it("rejects an unsupported pipeline version", () => {
+			expect(() => parsePipeline("version: 99\nsteps: []\n", FILE)).toThrow(
+				/unsupported pipeline version 99/,
+			);
+		});
+
+		it("requires a non-empty steps list", () => {
+			expect(() => parsePipeline("name: x\n", FILE)).toThrow(/non-empty "steps" list/);
+		});
+
+		it("rejects a malformed step id", () => {
+			expect(() =>
+				parsePipeline("steps:\n  - id: Bad_Id\n    agent: outliner\n", FILE, registry("outliner")),
+			).toThrow(/lowercase and hyphenated/);
+		});
+	});
+});
+
+describe("placeholders", () => {
+	it("extracts every reference", () => {
+		expect(placeholders("a ${vars.x} b ${output} c")).toEqual(["vars.x", "output"]);
+		expect(placeholders("none here")).toEqual([]);
+	});
+});
