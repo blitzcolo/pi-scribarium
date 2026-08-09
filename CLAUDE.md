@@ -104,23 +104,30 @@ For this machine: `--var bulk=deepseek/deepseek-v4-flash --var judgement=kimi-co
 
 ## Releases
 
-**Not published to npm.** Distribution is a GitHub release with the `npm pack` tarball attached;
-`npm install -g <url>` installs it directly, which is why the tarball has to be correct.
+**Not published to npm**, and `"private": true` enforces it. Distribution is a GitHub release with
+the `npm pack` tarball attached; `npm install -g <url>` installs it directly, which is why the
+tarball has to be correct.
 
 ```bash
-npm run typecheck && npm test && npm run build
-npm pack                       # -> pi-scribarium-<version>.tgz
+npm run release                # typecheck + test + pack -> pi-scribarium-<version>.tgz
 git tag v<version> && git push origin v<version>
 # attach the .tgz to the GitHub release, then update <RELEASE_TARBALL_URL> in README.md
 ```
 
+- **`npm publish --dry-run` exits 0 even with `private: true`.** Verified in npm 11.19.0:
+  `lib/commands/publish.js` guards its own private check with `if (workspace && manifest.private)`,
+  so a non-workspace package skips it, and the unconditional check lives in
+  `libnpmpublish/lib/publish.js` — which sits behind `if (!dryRun)`. A real `npm publish` therefore
+  throws `EPRIVATE` before uploading anything, but a dry-run prints `+ pi-scribarium@0.1.0` and
+  looks like it worked. Do not use `--dry-run` to test whether `private` is effective.
+- **`prepack` runs the build**, so a packed tarball can never contain a stale `dist/`. There is no
+  `prepublishOnly`: `private` makes it unreachable, and the gate it held now lives in `release`.
 - `files` excludes `dist/**/*.map`: the maps point at `src/`, which is not shipped, and carry no
   `sourcesContent`, so they were 86 of 183 published files and every one was dead.
 - The CI job packs the tarball, installs it into an empty project, and greps the scaffolded
   `pipeline.yaml` for real step ids. Not just `test -f`: `init` writes a one-step fallback stub when
   the shipped pipeline is missing from the package, and that stub passes an existence check while
   hiding exactly the packaging bug the test exists to catch.
-- `prepublishOnly` runs typecheck and tests, not just the build.
 
 ## Language
 

@@ -387,6 +387,7 @@ npm install
 npm run typecheck
 npm test          # no network, no credentials, no cost
 npm run build
+npm run release   # typecheck + test + pack -> the tarball a release ships
 ```
 
 Tests run against a scripted in-process provider that replaces only the network

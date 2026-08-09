@@ -1,6 +1,7 @@
 {
   "name": "pi-scribarium",
   "version": "0.1.0",
+  "private": true,
   "description": "Multi-agent orchestration for academic writing, built on the Pi Agent SDK",
   "keywords": [
     "pi-package",
@@ -39,7 +40,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest --run",
     "test:watch": "vitest",
-    "prepublishOnly": "npm run typecheck && npm test && npm run build"
+    "prepack": "npm run build",
+    "release": "npm run typecheck && npm test && npm pack"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "~0.84.1",
