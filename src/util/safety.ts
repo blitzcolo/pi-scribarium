@@ -24,6 +24,9 @@ export function currentDepth(env: NodeJS.ProcessEnv = process.env): number {
 
 export function maxDepth(env: NodeJS.ProcessEnv = process.env): number {
 	const parsed = Number.parseInt(env[MAX_DEPTH_VAR] ?? "", 10);
+	// `0` is the natural way to say "no nesting at all", so it must not fall
+	// through to the permissive default the way an unset or unparseable value does.
+	if (parsed === 0) return 0;
 	return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_DEPTH;
 }
 
@@ -40,9 +43,47 @@ export function assertDepthAllowed(env: NodeJS.ProcessEnv = process.env): void {
 	}
 }
 
-/** Environment for any child process, with the depth incremented. */
+/**
+ * Environment for any child process, with the depth incremented.
+ *
+ * Applied to `process.env` before a stage starts, because the child that matters
+ * is one the agent spawns itself: pi's `bash` tool inherits this process's
+ * environment, so without the increment an agent that shells out to `scribarium`
+ * starts again at depth 0 and the guard never fires.
+ */
 export function childEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
 	return { ...env, [DEPTH_VAR]: String(currentDepth(env) + 1) };
+}
+
+let depthHolders = 0;
+let depthBefore: string | undefined;
+
+/**
+ * Mark this process's environment as one level deeper for the duration of a
+ * stage that can shell out. Returns a release function; calling it twice is safe.
+ *
+ * Reference-counted because a fan-out runs stages concurrently. Every one of them
+ * wants the same value — the parent's depth plus one — so the depth is computed
+ * once, when the first holder enters, and restored when the last leaves. Without
+ * the count, overlapping stages would compound the increment and then restore in
+ * the wrong order.
+ */
+export function enterChildDepth(): () => void {
+	if (depthHolders === 0) {
+		depthBefore = process.env[DEPTH_VAR];
+		process.env[DEPTH_VAR] = String(currentDepth() + 1);
+	}
+	depthHolders++;
+
+	let released = false;
+	return () => {
+		if (released) return;
+		released = true;
+		depthHolders--;
+		if (depthHolders > 0) return;
+		if (depthBefore === undefined) delete process.env[DEPTH_VAR];
+		else process.env[DEPTH_VAR] = depthBefore;
+	};
 }
 
 /**

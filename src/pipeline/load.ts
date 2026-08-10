@@ -217,10 +217,13 @@ function readStep(
 		["steps", index, "model"],
 		ctx,
 	);
-	const maxTurns =
-		optionalInteger(step["max_turns"], ["steps", index, "max_turns"], ctx) ?? defaults.maxTurns;
-	const timeoutMs =
-		optionalInteger(step["timeout_ms"], ["steps", index, "timeout_ms"], ctx) ?? defaults.timeoutMs;
+	// Kept apart from `defaults`, which the engine resolves *after* the agent's own
+	// declaration. Folding them together here made a pipeline-wide default override
+	// every agent's budget: with `defaults: max_turns: 30`, a polisher that declared
+	// 40 was cut to 30 and failed the run on a long manuscript. An explicit per-step
+	// value is still an override — that is what writing it on the step means.
+	const maxTurns = optionalInteger(step["max_turns"], ["steps", index, "max_turns"], ctx);
+	const timeoutMs = optionalInteger(step["timeout_ms"], ["steps", index, "timeout_ms"], ctx);
 	const input = optionalString(step["input"], ["steps", index, "input"], ctx);
 
 	if (step["foreach"] !== undefined) {

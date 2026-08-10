@@ -58,8 +58,16 @@ steps:
 			registry("outliner"),
 		);
 
-		expect(spec.steps[0]).toMatchObject({ model: "provider/base", maxTurns: 10 });
+		// `model` resolves here, because a step's model must be concrete before
+		// preflight can check credentials for it.
+		expect(spec.steps[0]).toMatchObject({ model: "provider/base" });
 		expect(spec.steps[1]).toMatchObject({ model: "provider/special", maxTurns: 3 });
+
+		// `max_turns` deliberately does not: the default is kept on the spec and
+		// resolved by the engine *after* the agent's own declaration. Folding it in
+		// here made a pipeline-wide default silently override every agent's budget.
+		expect(spec.steps[0]).not.toHaveProperty("maxTurns");
+		expect(spec.defaults.maxTurns).toBe(10);
 	});
 
 	it("parses builtin steps with their options", () => {

@@ -8,6 +8,7 @@ import {
 import { DEFAULT_TOOLS, type AgentDefinition, type ThinkingLevelName } from "../agents/types.js";
 import { resolveStageModel } from "./model.js";
 import { createStageResourceLoader } from "./resource-loader.js";
+import { enterChildDepth } from "../util/safety.js";
 import { truncateOutput } from "./truncate.js";
 import { TurnBudget } from "./turn-budget.js";
 
@@ -181,6 +182,9 @@ export async function runStage(options: RunStageOptions): Promise<RunStageResult
 		quietStartup: true,
 	});
 
+	// `tools` is a strict allowlist; [] is honoured as "no tools".
+	const tools = [...(agent.tools ?? DEFAULT_TOOLS)];
+
 	const sessionManager =
 		options.sessionDir !== undefined
 			? SessionManager.create(options.cwd, options.sessionDir)
@@ -194,13 +198,19 @@ export async function runStage(options: RunStageOptions): Promise<RunStageResult
 		sessionManager,
 		settingsManager,
 		// `tools` is a strict allowlist; [] is honoured as "no tools".
-		tools: [...(agent.tools ?? DEFAULT_TOOLS)],
+		tools,
 		...(resolved !== undefined ? { model: resolved.model } : {}),
 		...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
 	});
 	if (modelFallbackMessage !== undefined) {
 		onEvent?.({ type: "warn", message: modelFallbackMessage });
 	}
+
+	// pi's `bash` tool inherits this process's environment, so an agent that can
+	// shell out is exactly the case the recursion guard was written for: without
+	// the increment a nested `scribarium` starts again at depth 0 and the guard
+	// never fires. Released in the finally below, after the session is disposed.
+	const releaseDepth = tools.includes("bash") ? enterChildDepth() : undefined;
 
 	const budget = new TurnBudget(agent.maxTurns, agent.softTurnRatio);
 	let retries = 0;
@@ -273,6 +283,12 @@ export async function runStage(options: RunStageOptions): Promise<RunStageResult
 	timer?.unref?.();
 
 	let thrown: string | undefined;
+	let stateError: string | undefined;
+	let stats: ReturnType<typeof session.getSessionStats> | undefined;
+	let contextUsage: ReturnType<typeof session.getContextUsage>;
+	let rawText = "";
+	let sessionFile: string | undefined;
+
 	try {
 		// Resolves only after the whole accepted run settles, including retries.
 		await session.prompt(options.prompt);
@@ -284,19 +300,34 @@ export async function runStage(options: RunStageOptions): Promise<RunStageResult
 		// on a stage that has in fact already finished.
 		if (timer !== undefined) clearTimeout(timer);
 		await session.waitForIdle().catch(() => {});
+
+		// All of this belongs in the finally, not after it. A throw while reading
+		// stats off an aborted session would otherwise skip the teardown *and*
+		// propagate — breaking this function's "failures are returned, not thrown"
+		// contract, and leaving an abort listener on the run-wide signal plus a
+		// live session behind for every occurrence. At a fan-out's scale that is
+		// MaxListenersExceededWarning and thirty leaked sessions.
+		try {
+			// Everything must be read before dispose().
+			stateError = session.state.errorMessage;
+			stats = session.getSessionStats();
+			contextUsage = session.getContextUsage();
+			rawText = session.getLastAssistantText() ?? "";
+			sessionFile = session.sessionFile;
+		} catch (error) {
+			thrown ??= error instanceof Error ? error.message : String(error);
+		}
+
+		unsubscribe();
+		options.signal?.removeEventListener("abort", onExternalAbort);
+		await settingsManager.flush().catch(() => {});
+		try {
+			session.dispose();
+		} catch {
+			// Nothing left to salvage; the result is already assembled.
+		}
+		releaseDepth?.();
 	}
-
-	// Everything must be read before dispose().
-	const stateError = session.state.errorMessage;
-	const stats = session.getSessionStats();
-	const contextUsage = session.getContextUsage();
-	const rawText = session.getLastAssistantText() ?? "";
-	const sessionFile = session.sessionFile;
-
-	unsubscribe();
-	options.signal?.removeEventListener("abort", onExternalAbort);
-	await settingsManager.flush().catch(() => {});
-	session.dispose();
 
 	const { text, truncated } = truncateOutput(
 		rawText,
@@ -312,15 +343,15 @@ export async function runStage(options: RunStageOptions): Promise<RunStageResult
 		retries,
 		compactions,
 		usage: {
-			input: stats.tokens.input,
-			output: stats.tokens.output,
-			cacheRead: stats.tokens.cacheRead,
-			cacheWrite: stats.tokens.cacheWrite,
-			total: stats.tokens.total,
-			cost: stats.cost,
+			input: stats?.tokens.input ?? 0,
+			output: stats?.tokens.output ?? 0,
+			cacheRead: stats?.tokens.cacheRead ?? 0,
+			cacheWrite: stats?.tokens.cacheWrite ?? 0,
+			total: stats?.tokens.total ?? 0,
+			cost: stats?.cost ?? 0,
 		},
 		contextPercent: contextUsage?.percent ?? null,
-		sessionId: stats.sessionId,
+		sessionId: stats?.sessionId ?? "",
 		durationMs: Date.now() - startedAt,
 		...(sessionFile !== undefined ? { sessionFile } : {}),
 	};

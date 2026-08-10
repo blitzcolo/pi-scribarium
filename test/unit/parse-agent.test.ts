@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { normalizeTools, parseAgentFile } from "../../src/agents/parse.js";
-import { AGENT_DEFAULTS, DEFAULT_TOOLS } from "../../src/agents/types.js";
+import { AGENT_DEFAULTS, BUILTIN_TOOLS, DEFAULT_TOOLS } from "../../src/agents/types.js";
 import { AgentDefinitionError } from "../../src/util/errors.js";
 
 const FILE = "/agents/example.md";
@@ -167,8 +167,11 @@ describe("normalizeTools", () => {
 		expect(DEFAULT_TOOLS).toEqual(["read", "grep", "find", "ls"]);
 	});
 
-	it("treats `all` as unspecified and `none`/empty as an explicit empty allowlist", () => {
-		expect(normalizeTools("all", FILE)).toBeUndefined();
+	it("treats `all` as every built-in tool and `none`/empty as an explicit empty allowlist", () => {
+		// Not `undefined`: that means "unset", which resolves to the read-only
+		// DEFAULT_TOOLS — so `tools: all` would have granted strictly fewer tools
+		// than listing them, and the agent would fail with no way to write.
+		expect(normalizeTools("all", FILE)).toEqual([...BUILTIN_TOOLS]);
 		// The SDK honours [] as a real empty allowlist (CLAUDE.md gotcha #8).
 		expect(normalizeTools("none", FILE)).toEqual([]);
 		expect(normalizeTools("", FILE)).toEqual([]);

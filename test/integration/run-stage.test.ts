@@ -3,7 +3,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { AgentDefinition } from "../../src/agents/types.js";
+import { parseAgentFile } from "../../src/agents/parse.js";
+import { BUILTIN_TOOLS, type AgentDefinition } from "../../src/agents/types.js";
 import { runStage } from "../../src/runtime/run-stage.js";
 import {
 	createScriptedRuntime,
@@ -119,6 +120,27 @@ describe("runStage against a scripted provider", () => {
 		// The steer really reached the model as a user message.
 		const sawBudgetNotice = scripted.requests.some((r) => r.lastUserText.includes("Budget notice"));
 		expect(sawBudgetNotice).toBe(true);
+	});
+
+	// `tools: all` used to normalize to undefined, which means "unset" and resolves
+	// to the read-only DEFAULT_TOOLS — so it granted strictly fewer tools than
+	// listing them out, and the agent burned its budget with no way to write.
+	it("grants every built-in tool for `tools: all`", async () => {
+		const parsed = parseAgentFile(
+			`---\nname: tester\ndescription: Test agent\nmodel: ${SCRIPTED_MODEL_REF}\ntools: all\n---\n\nROLE_PROMPT_SENTINEL\n`,
+			"/agents/tester.md",
+			"workspace",
+		);
+		const scripted = await createScriptedRuntime(agentDir, () => ({ text: "Done." }));
+		await runStage({
+			agent: parsed,
+			prompt: "Do it.",
+			cwd: workspace,
+			agentDir,
+			modelRuntime: scripted.runtime,
+		});
+
+		expect(scripted.requests[0]?.toolNames.sort()).toEqual([...BUILTIN_TOOLS].sort());
 	});
 
 	it("sends the role prompt and nothing from the machine", async () => {

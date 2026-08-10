@@ -32,8 +32,11 @@ export function normalizeTools(value: unknown, filePath: string): readonly strin
 		names = value.map((entry) => String(entry).trim()).filter((entry) => entry.length > 0);
 	} else if (typeof value === "string") {
 		const trimmed = value.trim();
-		// `all` opts back into pi's defaults; `none`/empty means no tools at all.
-		if (trimmed === "all") return undefined;
+		// `all` means every built-in tool. Returning undefined here would instead
+		// mean "unset", which resolves to DEFAULT_TOOLS — a read-only set — so
+		// `tools: all` granted strictly *fewer* tools than spelling them out, and
+		// the agent burned its whole budget before failing without a `write`.
+		if (trimmed === "all") return [...BUILTIN_TOOLS];
 		if (trimmed === "" || trimmed === "none") return [];
 		names = trimmed
 			.split(",")

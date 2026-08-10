@@ -230,6 +230,77 @@ steps:
 		expect(scripted.requests.every((r) => !r.systemPrompt.includes("analyst"))).toBe(true);
 	});
 
+	// A pipeline-wide `defaults:` used to be folded into every step, and the step
+	// value then overrode the agent — so `defaults: max_turns: 30` silently cut a
+	// polisher that declared 40 down to 30 and raised a 20-turn analyst to 30.
+	// That is the opposite of how `model:` resolves, where the agent wins.
+	it("lets an agent's own max_turns survive a pipeline-wide default", async () => {
+		const budgeted = AgentRegistry.fromDefinitions([
+			parseAgentFile(
+				`---\nname: analyst\ndescription: analyst\nmodel: ${SCRIPTED_MODEL_REF}\n` +
+					`tools: [read, write]\nmax_turns: 2\n---\n\nYou are the analyst.\n`,
+				"/agents/analyst.md",
+				"shipped",
+			),
+		]);
+
+		const source =
+			"defaults:\n  max_turns: 30\nsteps:\n  - id: a\n    agent: analyst\n    output: a.md\n";
+		const spec = parsePipeline(source, path.join(workspace, "pipeline.yaml"), budgeted);
+		const scripted = await createScriptedRuntime(agentDir, () => ({
+			// Never finishes on its own, so the budget is what stops it.
+			toolCalls: [{ name: "read", args: { path: "nothing.md" } }],
+		}));
+
+		const final = await runPipeline({
+			spec,
+			layout,
+			state: RunStateStore.create(
+				layout,
+				initialRunState({ spec, layout, pipelineHash: hashPipeline(source) }),
+			),
+			registry: budgeted,
+			modelRuntime: scripted.runtime,
+			agentDir,
+		});
+
+		// The agent's 2, not the pipeline's 30. abort() is cooperative, so a turn
+		// already in flight may still land — hence a bound rather than an equality.
+		expect(final.steps["a"]?.turns).toBeLessThanOrEqual(3);
+	});
+
+	// The soft-limit steer asks the agent to stop exploring and write its file, and
+	// the wrap-up turn is the one that trips the budget. Failing on that made the
+	// cooperative path impossible to survive and threw away a finished artifact.
+	// The declared output is the contract; every turn completed cleanly, so unlike
+	// a timeout there is no half-written file to worry about.
+	it("accepts a stage that spent its whole turn budget but wrote its output", async () => {
+		const source = "steps:\n  - id: a\n    agent: analyst\n    max_turns: 3\n    output: a.md\n";
+		let wrote = false;
+		const { final } = await execute(source, () => {
+			if (!wrote) {
+				wrote = true;
+				return { toolCalls: [{ name: "write", args: { path: "a.md", content: "done\n" } }] };
+			}
+			// Then never stops, so the budget is what ends it.
+			return { toolCalls: [{ name: "read", args: { path: "a.md" } }] };
+		});
+
+		expect(final.steps["a"]?.status).toBe("completed");
+		expect(final.status).toBe("completed");
+		expect(fs.readFileSync(path.join(workspace, "a.md"), "utf-8")).toBe("done\n");
+	});
+
+	it("still fails a stage that spent its budget without writing its output", async () => {
+		const source = "steps:\n  - id: a\n    agent: analyst\n    max_turns: 3\n    output: a.md\n";
+		const { final } = await execute(source, () => ({
+			toolCalls: [{ name: "read", args: { path: "nothing.md" } }],
+		}));
+
+		expect(final.steps["a"]?.status).toBe("failed");
+		expect(final.steps["a"]?.error?.code).toBe("TURN_BUDGET_EXCEEDED");
+	});
+
 	it("fails the run when the corpus for ingest is empty", async () => {
 		const { final } = await execute("steps:\n  - id: ingest\n    builtin: ingest\n", () => ({
 			text: "unused",

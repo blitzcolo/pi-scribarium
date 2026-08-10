@@ -4,7 +4,7 @@ import * as path from "node:path";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 
 import type { AgentRegistry } from "../agents/registry.js";
-import type { ThinkingLevelName } from "../agents/types.js";
+import { AGENT_DEFAULTS, type ThinkingLevelName } from "../agents/types.js";
 import { runStage, type RunStageResult, type StageEvent } from "../runtime/run-stage.js";
 import type { RunLayout } from "../workspace/layout.js";
 import {
@@ -505,11 +505,22 @@ async function runOneStage(
 	}
 
 	const modelRef = agent.modelRef ?? step.model ?? options.defaultModelRef;
+	// Precedence, matching `model` (agent first): an explicit value on the step is
+	// an override, but a pipeline-wide `defaults:` is a fallback for agents that
+	// state no budget of their own. `agent.maxTurns` is always set — from the
+	// frontmatter or AGENT_DEFAULTS — so the pipeline default only applies when
+	// the agent left it at the built-in default.
+	const defaults = options.spec.defaults;
+	const maxTurns =
+		step.maxTurns ??
+		(agent.maxTurns === AGENT_DEFAULTS.maxTurns ? (defaults.maxTurns ?? agent.maxTurns) : agent.maxTurns);
+	const timeoutMs = step.timeoutMs ?? agent.timeoutMs ?? defaults.timeoutMs;
+
 	const result: RunStageResult = await runStage({
 		agent: {
 			...agent,
-			...(step.maxTurns !== undefined ? { maxTurns: step.maxTurns } : {}),
-			...(step.timeoutMs !== undefined ? { timeoutMs: step.timeoutMs } : {}),
+			maxTurns,
+			...(timeoutMs !== undefined ? { timeoutMs } : {}),
 		},
 		prompt: finalTask,
 		cwd: layout.workspace,
@@ -524,13 +535,37 @@ async function runOneStage(
 
 	fs.appendFileSync(logFile, redactSecrets(`\n## Final text\n\n${result.text}\n`), "utf-8");
 
-	if (result.status !== "completed") {
+	// The declared outputs are the contract, and a stage that spent its whole turn
+	// budget but wrote everything it promised has met it. That is precisely what
+	// the soft-limit steer asks the agent to do — stop exploring, write the file —
+	// and the wrap-up turn is the one that trips the budget, so failing here made
+	// the cooperative path impossible to survive and cost the artifact as well.
+	// Every turn completed cleanly, so unlike a timeout there is no half-written
+	// file to worry about.
+	const spentBudget =
+		result.status === "failed" && result.error?.code === "TURN_BUDGET_EXCEEDED";
+	const wroteEverything =
+		outputs.length > 0 && outputs.every((output) => fs.existsSync(layout.artifact(output)));
+
+	if (result.status !== "completed" && !(spentBudget && wroteEverything)) {
 		return {
 			outputs,
 			result,
 			...(modelRef !== undefined ? { modelRef } : {}),
 			error: result.error ?? { code: "AGENT_ERROR", message: "stage did not complete" },
 		};
+	}
+
+	if (spentBudget) {
+		options.onEvent?.({
+			type: "stage",
+			stepId: step.id,
+			...(item !== undefined ? { itemId: item.id } : {}),
+			event: {
+				type: "warn",
+				message: `${step.id}${item === undefined ? "" : `/${item.id}`}: used its whole turn budget, but wrote every declared output`,
+			},
+		});
 	}
 
 	// The declared outputs are the real contract. getLastAssistantText() is
