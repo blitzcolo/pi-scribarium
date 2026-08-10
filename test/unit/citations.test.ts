@@ -75,6 +75,32 @@ describe("checkCitations", () => {
 		expect(report.citations[0]?.verdict).toBe("supported");
 	});
 
+	// Taking the first whitespace token kept the comma in `[Smith, 2020]` — while
+	// `[Smith et al., 2020]` gave a clean "smith", so one author resolved two ways
+	// depending on how many co-authors they had — and reduced a multi-word surname
+	// to its particle: `[Van Dijk 2019]` looked up "van".
+	it("reads the surname out of the awkward but common forms", () => {
+		corpus("refs.md", "Smith, J. (2020). Title.\nVan Dijk, P. (2019). Other.\n");
+		manuscript("See [Smith, 2020] and [Van Dijk 2019].");
+
+		const report = check();
+		expect(report.citations.map((c) => [c.surname, c.verdict])).toEqual([
+			["Smith", "supported"],
+			["Van Dijk", "supported"],
+		]);
+	});
+
+	// Support was raw substring containment against the whole document, so "li"
+	// matched "quality" and "he" matched "the". A fabricated citation with a short
+	// surname passed, with a foundIn path that was pure coincidence.
+	it("does not accept a surname that merely appears inside another word", () => {
+		corpus("refs.md", "A paper about quality and the method.\n");
+		manuscript("As shown in [Li 2019] and [He 2021].");
+
+		const report = check();
+		expect(report.unsupported.map((c) => c.raw)).toEqual(["[Li 2019]", "[He 2021]"]);
+	});
+
 	it("counts each distinct citation once however often it appears", () => {
 		corpus("index.md", "Hersbach 2020");
 		manuscript("[Hersbach 2020] and again [Hersbach 2020] and once more [Hersbach 2020].");

@@ -99,7 +99,10 @@ const SECRET_PATTERNS: Array<{ pattern: RegExp; replace: string }> = [
 	{ pattern: /\b(sk|pk|rk)-[A-Za-z0-9_-]{16,}\b/g, replace: "$1-[REDACTED]" },
 	// Bearer tokens in quoted headers.
 	{ pattern: /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{16,}/gi, replace: "$1 [REDACTED]" },
-	// Long hex blobs, which are usually tokens rather than prose.
+	// Long hex blobs, which are usually tokens rather than prose. This also blanks
+	// a git SHA quoted in a prompt, which is a real cost to an audit log — but a
+	// 40-character hex token is a plausible credential, and exempting that exact
+	// length to keep commit hashes readable is a bad trade.
 	{ pattern: /\b[a-f0-9]{40,}\b/gi, replace: "[REDACTED]" },
 	// `"apiKey": "..."` and friends, whatever the value looks like.
 	{

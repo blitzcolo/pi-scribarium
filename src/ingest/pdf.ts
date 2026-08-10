@@ -295,15 +295,29 @@ async function isUpToDate(sourcePath: string, outputPath: string): Promise<boole
 	}
 }
 
-/** Disambiguate identical basenames coming from different directories. */
+/**
+ * Disambiguate identical basenames coming from different directories.
+ *
+ * The generated name has to be registered too, and checked against the names
+ * already taken: `a/paper.pdf` and `b/paper.pdf` yield `paper` and `paper-2`,
+ * and a real `paper-2.pdf` in the same batch would otherwise be handed `paper-2`
+ * as well — two papers written to one file, the second silently overwriting the
+ * first, both reported as extracted.
+ */
 function uniqueSlug(slug: string, used: Map<string, number>): string {
-	const seen = used.get(slug);
-	if (seen === undefined) {
+	if (!used.has(slug)) {
 		used.set(slug, 1);
 		return slug;
 	}
-	used.set(slug, seen + 1);
-	return `${slug}-${seen + 1}`;
+	let attempt = (used.get(slug) ?? 1) + 1;
+	let candidate = `${slug}-${attempt}`;
+	while (used.has(candidate)) {
+		attempt++;
+		candidate = `${slug}-${attempt}`;
+	}
+	used.set(slug, attempt);
+	used.set(candidate, 1);
+	return candidate;
 }
 
 /**
@@ -332,7 +346,17 @@ export function collectCorpusInputs(
 			continue;
 		}
 		if (stats.isDirectory()) {
-			for (const child of fs.readdirSync(entry, { withFileTypes: true })) {
+			let children: fs.Dirent[];
+			try {
+				children = fs.readdirSync(entry, { withFileTypes: true });
+			} catch {
+				// An unreadable directory is skipped, not fatal. This runs for every
+				// configured directory before any extraction starts, so an optional
+				// `references/` on a stale mount would otherwise take down the
+				// required `corpus/` with it, before a single document was read.
+				continue;
+			}
+			for (const child of children) {
 				if (!child.isFile()) continue;
 				if (isNotADocument(child.name)) continue;
 				if (accepts(path.extname(child.name).toLowerCase())) {

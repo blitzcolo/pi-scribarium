@@ -1,15 +1,15 @@
 /**
  * Pipeline specification.
  *
- * M1 supports two step kinds executed strictly in order:
+ * Four step kinds, executed in order:
  *
  *   - `agent`   — run one agent definition to completion
- *   - `builtin` — deterministic code (corpus ingest today, citation checking in M4)
+ *   - `foreach` — fan the same agent out over many items, one session each
+ *   - `builtin` — deterministic code: ingest, assemble, build-index, citations
+ *   - `gate`    — stop for a human decision
  *
- * `foreach` fan-out and `gate` steps arrive in M2 and M3. Their fields are
- * reserved here so a pipeline written today keeps parsing, but the loader
- * rejects them with a clear "not yet supported" message rather than silently
- * ignoring a step the author expected to run.
+ * Only a gate can move the cursor backwards: rejecting one rewinds to its
+ * `on_reject` target and reopens every step from there on.
  */
 
 export const PIPELINE_VERSION = 1;

@@ -141,11 +141,24 @@ steps:
 			).toThrow(/exactly one/);
 		});
 
+		// The gate branch runs before the agent/builtin check, so this used to be
+		// accepted as a plain gate — silently discarding the agent, its model, its
+		// input and its turn budget. The stray `agent` means the author meant two
+		// separate steps, and guessing which one they wanted is not ours to do.
 		it("rejects a step that is both a gate and an agent", () => {
 			const source = "steps:\n  - id: a\n    agent: outliner\n    gate: Approve\n    output: x.md\n";
-			// `gate` wins the shape check, so the stray `agent` is the giveaway that
-			// the author meant two separate steps.
-			expect(() => parsePipeline(source, FILE, registry("outliner"))).not.toThrow();
+			expect(() => parsePipeline(source, FILE, registry("outliner"))).toThrow(
+				/sets "gate" as well as "agent"/,
+			);
+		});
+
+		// `gate: false` is not a gate, and reading it as one turned the step into an
+		// approval stop that ran nothing.
+		it("does not treat a falsey gate as a gate", () => {
+			const source = "steps:\n  - id: a\n    agent: outliner\n    gate: false\n    output: x.md\n";
+			expect(parsePipeline(source, FILE, registry("outliner")).steps[0]).toMatchObject({
+				kind: "agent",
+			});
 		});
 
 		it("rejects a placeholder that will never resolve", () => {

@@ -6,7 +6,7 @@ import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { AgentRegistry } from "../agents/registry.js";
 import { AGENT_DEFAULTS, type ThinkingLevelName } from "../agents/types.js";
 import { runStage, type RunStageResult, type StageEvent } from "../runtime/run-stage.js";
-import type { RunLayout } from "../workspace/layout.js";
+import { contain, type RunLayout } from "../workspace/layout.js";
 import {
 	addUsage,
 	emptyUsage,
@@ -26,6 +26,7 @@ import { interpolate, type TemplateScope } from "./template.js";
 import type {
 	AgentStepSpec,
 	ForeachItem,
+	ForeachSource,
 	ForeachStepSpec,
 	GateStepSpec,
 	PipelineSpec,
@@ -158,7 +159,7 @@ export async function runPipeline(options: RunPipelineOptions): Promise<RunState
 
 		try {
 			if (step.kind === "builtin") {
-				await executeBuiltin(step, stepState, options);
+				await executeBuiltin(step, stepState, options, state);
 			} else if (step.kind === "foreach") {
 				await executeForeach(step, stepState, options, state, store);
 			} else {
@@ -234,7 +235,12 @@ async function executeGate(
 	const { layout, onEvent } = options;
 	const handler = options.gate ?? (async () => ({ kind: "approve" as const }));
 
-	const artifacts = step.show.map((relative) => {
+	const scope = baseScope(options, state);
+	const artifacts = step.show.map((template) => {
+		// Interpolated, not used verbatim: the loader validates these as templates,
+		// so `show: outline/${vars.name}.md` passes validation and then presented
+		// the reviewer with a literal path that could not exist.
+		const relative = interpolate(template, scope);
 		const absolutePath = layout.artifact(relative);
 		let bytes = 0;
 		let exists = false;
@@ -355,8 +361,23 @@ async function executeBuiltin(
 	step: Extract<StepSpec, { kind: "builtin" }>,
 	stepState: StepState,
 	options: RunPipelineOptions,
+	state: RunState,
 ): Promise<void> {
-	const result = await runBuiltin(step, {
+	// `with` values are validated as templates by the loader, so they have to be
+	// expanded here too — otherwise `manuscript: final/${vars.slug}.md` loads
+	// cleanly and then fails at run time on a path nobody wrote.
+	const scope = baseScope(options, state);
+	const expanded = {
+		...step,
+		with: Object.fromEntries(
+			Object.entries(step.with).map(([key, value]) => [
+				key,
+				typeof value === "string" ? interpolate(value, scope) : value,
+			]),
+		),
+	};
+
+	const result = await runBuiltin(expanded, {
 		workspace: options.layout.workspace,
 		resolveOutput: (relative) => options.layout.artifact(relative),
 		onProgress: (message) => options.onEvent?.({ type: "log", message }),
@@ -427,7 +448,9 @@ function cachedOutputs(
 	const { layout } = options;
 	let sourceMtime: number;
 	try {
-		sourceMtime = fs.statSync(path.resolve(layout.workspace, item.path)).mtimeMs;
+		// Contained like every other declared path: `item.path` comes from a glob
+		// or a JSON source, and path.resolve discards the base for an absolute one.
+		sourceMtime = fs.statSync(layout.artifact(item.path)).mtimeMs;
 	} catch {
 		return null;
 	}
@@ -628,7 +651,7 @@ async function executeForeach(
 	state: RunState,
 	store: RunStateStore,
 ): Promise<void> {
-	const items = resolveItems(step.source, options.layout.workspace);
+	const items = resolveItems(interpolateSource(step.source, baseScope(options, state)), options.layout.workspace);
 
 	// A rejection asks for this step to be done again, so an item completed under
 	// an *earlier* attempt no longer counts as done — carrying them all forward
@@ -860,10 +883,10 @@ function quarantineFailedOutputs(
 		const source = layout.artifact(relative);
 		const extension = path.extname(relative);
 		const base = relative.slice(0, relative.length - extension.length);
-		const target = path.join(
+		const target = contain(
 			layout.attemptsDir,
-			stepId,
-			`${base}.failed-attempt${attempt}${extension}`,
+			path.join(stepId, `${base}.failed-attempt${attempt}${extension}`),
+			"archive",
 		);
 		try {
 			if (!fs.existsSync(source)) continue;
@@ -876,6 +899,28 @@ function quarantineFailedOutputs(
 		}
 	}
 	return moved;
+}
+
+/**
+ * Expand `${...}` in a fan-out's source.
+ *
+ * The loader validates every other template but never looked at this one, so
+ * `foreach: "${vars.dir}/text/*.md"` loaded cleanly and then matched nothing —
+ * or, with `optional: true`, skipped the whole analysis stage in silence.
+ */
+function interpolateSource(source: ForeachSource, scope: TemplateScope): ForeachSource {
+	switch (source.kind) {
+		case "glob":
+			return { kind: "glob", pattern: interpolate(source.pattern, scope) };
+		case "json":
+			return {
+				kind: "json",
+				file: interpolate(source.file, scope),
+				...(source.path !== undefined ? { path: source.path } : {}),
+			};
+		case "items":
+			return source;
+	}
 }
 
 function buildTask(

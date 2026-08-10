@@ -95,8 +95,14 @@ export function buildReferenceIndex(options: BuildIndexOptions): IndexReport {
 	// Newest first: recency is the one ordering a writer nearly always wants,
 	// and an unknown year sorts last rather than pretending to be year zero.
 	cards.sort((a, b) => {
-		const byYear = yearKey(b.year) - yearKey(a.year);
-		return byYear !== 0 ? byYear : a.title.localeCompare(b.title);
+		const left = yearKey(a.year);
+		const right = yearKey(b.year);
+		// Subtracting two -Infinity year keys gives NaN, which is neither 0 nor an
+		// ordering — so the alphabetical tiebreak never ran and undated cards
+		// (preprints, tech reports: exactly the ones a writer looks up by name)
+		// kept insertion order in an index whose whole purpose is to be scannable.
+		if (left !== right) return right - left;
+		return a.title.localeCompare(b.title);
 	});
 
 	return { cards, unreadable, untitled, markdown: render(cards, unreadable, untitled) };

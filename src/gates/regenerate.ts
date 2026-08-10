@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-import type { RunLayout } from "../workspace/layout.js";
+import { contain, type RunLayout } from "../workspace/layout.js";
 
 export interface ArchivedAttempt {
 	path: string;
@@ -35,8 +35,12 @@ export function archiveAttempt(
 		}
 
 		const extension = path.extname(relative);
-		const base = relative.slice(0, relative.length - extension.length);
-		const target = path.join(layout.attemptsDir, stepId, `${base}.attempt${attempt}${extension}`);
+		const base = path.join(stepId, relative.slice(0, relative.length - extension.length));
+		const target = contain(
+			layout.attemptsDir,
+			`${base}.attempt${attempt}${extension}`,
+			"archive",
+		);
 
 		fs.mkdirSync(path.dirname(target), { recursive: true });
 		fs.writeFileSync(target, content, "utf-8");

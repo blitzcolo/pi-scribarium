@@ -102,6 +102,31 @@ describe("ingest builtin", () => {
 	 * corpus/ stays strict: it is small, hand-picked, and the profile every
 	 * later stage rests on.
 	 */
+	// uniqueSlug never registered the name it generated, so a real `paper-2.pdf`
+	// was handed the same slug the disambiguator had just invented for the second
+	// `paper.pdf`: two papers written to one file, the second silently clobbering
+	// the first, both reported as extracted.
+	it("gives every document its own file even when the slugs would collide", async () => {
+		seed("corpus", {
+			"paper.pdf": minimalPdf([bodyPage("FIRST_PAPER")]),
+			"Paper.pdf": minimalPdf([bodyPage("SECOND_PAPER")]),
+			"paper-2.pdf": minimalPdf([bodyPage("THIRD_PAPER")]),
+		});
+
+		const result = await runBuiltin(step({ from: "corpus" }), ctx());
+		expect(result.ok).toBe(true);
+
+		const written = fs.readdirSync(path.join(workspace, "corpus", "text")).sort();
+		expect(written).toHaveLength(3);
+
+		const bodies = written.map((name) =>
+			fs.readFileSync(path.join(workspace, "corpus", "text", name), "utf-8"),
+		);
+		for (const marker of ["FIRST_PAPER", "SECOND_PAPER", "THIRD_PAPER"]) {
+			expect(bodies.some((body) => body.includes(marker))).toBe(true);
+		}
+	});
+
 	describe("failure isolation", () => {
 		const withOneScan = {
 			"good.pdf": minimalPdf([bodyPage("READABLE")]),

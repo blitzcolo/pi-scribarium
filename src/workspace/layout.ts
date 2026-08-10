@@ -2,6 +2,8 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
+import { ScribariumError } from "../util/errors.js";
+
 /**
  * Workspace and run directory layout.
  *
@@ -72,7 +74,7 @@ export class RunLayout {
 	 * superseded attempts.
 	 */
 	artifact(relativePath: string): string {
-		return path.join(this.workspace, relativePath);
+		return contain(this.workspace, relativePath, "artifact");
 	}
 
 	logFile(stepId: string, itemId?: string): string {
@@ -104,6 +106,35 @@ export class RunLayout {
 			}
 		}
 	}
+}
+
+/**
+ * Resolve a declared path, refusing anything that leaves the workspace.
+ *
+ * `path.join` *normalizes* `..` rather than rejecting it, and not every path
+ * reaching here is a literal from the pipeline file: a fan-out over a JSON items
+ * source spreads arbitrary fields into the template scope, and only `item.id` is
+ * slugged. So `output: draft/${item.stem}.md` with a stem of `../../../tmp/x`
+ * wrote outside the workspace, with mkdirSync(recursive) obligingly creating the
+ * path to get there. An absolute value escapes outright.
+ *
+ * The tool allowlist is the containment for what an *agent* does (CLAUDE.md
+ * gotcha #19); this is the containment for what the orchestrator itself writes.
+ */
+export function contain(workspace: string, relativePath: string, what: string): string {
+	const resolved = path.resolve(workspace, relativePath);
+	const root = path.resolve(workspace);
+	if (resolved !== root && !resolved.startsWith(root + path.sep)) {
+		throw new WorkspaceEscapeError(
+			`Refusing to use ${what} path "${relativePath}": it resolves to ${resolved}, ` +
+				`outside the workspace ${root}.`,
+		);
+	}
+	return resolved;
+}
+
+export class WorkspaceEscapeError extends ScribariumError {
+	readonly exitCode = 2;
 }
 
 /** Sortable, collision-resistant run id: `20260809T183000-3f2a`. */

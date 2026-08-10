@@ -93,7 +93,7 @@ function runCitationCheck(step: BuiltinStepSpec, ctx: BuiltinContext): BuiltinRe
 		typeof step.with["manuscript"] === "string" ? step.with["manuscript"] : "final/paper.md";
 	const sources = Array.isArray(step.with["sources"])
 		? (step.with["sources"] as unknown[]).map(String)
-		: ["corpus/text", "analysis/papers", "source"];
+		: ["corpus/text", "analysis/papers", "references/text", "references/cards", "source"];
 	const out = typeof step.with["out"] === "string" ? step.with["out"] : "review/citations.md";
 
 	let report: CitationReport;
@@ -176,7 +176,13 @@ function assembleSections(step: BuiltinStepSpec, ctx: BuiltinContext): BuiltinRe
 
 	for (const section of sections) {
 		const id = typeof section.id === "string" ? section.id : undefined;
-		if (id === undefined) continue;
+		if (id === undefined) {
+			// Counted, not skipped silently: dropping it made the summary report
+			// "assembled 3/3" for a file that held two, with none of the SECTION
+			// MISSING markers the rest of this function relies on to keep gaps visible.
+			missing.push(`(entry ${sections.indexOf(section) + 1} has no id)`);
+			continue;
+		}
 		const file = path.join(fromDir, `${id}.md`);
 		try {
 			parts.push(fs.readFileSync(file, "utf-8").trim());

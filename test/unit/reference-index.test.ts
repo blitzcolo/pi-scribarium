@@ -25,6 +25,19 @@ function card(name: string, frontmatter: string, body = "## Work\n\nSomething.\n
 const build = () => buildReferenceIndex({ workspace, from: "references/cards" });
 
 describe("buildReferenceIndex", () => {
+	// An undated year maps to -Infinity, and subtracting two of those gives NaN,
+	// which is neither 0 nor an ordering — so the alphabetical tiebreak never ran
+	// and preprints and tech reports, exactly the entries a writer looks up by
+	// name, sat in arbitrary order at the bottom of a scannable index.
+	it("sorts undated cards alphabetically rather than by insertion order", () => {
+		card("z", "title: Zebra\nyear: unknown\nvenue: arXiv\ncite_for: x");
+		card("a", "title: Alpha\nyear: n/a\nvenue: arXiv\ncite_for: y");
+		card("m", "title: Mango\nvenue: arXiv\ncite_for: z");
+		card("d", "title: Dated\nyear: 2024\nvenue: CVPR\ncite_for: w");
+
+		expect(build().cards.map((c) => c.title)).toEqual(["Dated", "Alpha", "Mango", "Zebra"]);
+	});
+
 	it("lists every card as one row", () => {
 		card("a", 'title: Thermal Fusion\nyear: 2024\nvenue: CVPR\ncite_for: RGB-T benchmarks');
 		card("b", 'title: Radiative Transfer\nyear: 2023\nvenue: TIP\ncite_for: physical priors');

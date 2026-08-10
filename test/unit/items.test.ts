@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { resolveItems } from "../../src/pipeline/items.js";
+import { RunLayout } from "../../src/workspace/layout.js";
 
 let workspace: string;
 
@@ -71,5 +72,23 @@ describe("resolveItems", () => {
 		expect(() => resolveItems({ kind: "glob", pattern: "refs/**/*.md" }, workspace)).toThrow(
 			/refs\/a\/intro\.md and refs\/b\/intro\.md/,
 		);
+	});
+});
+
+describe("workspace containment", () => {
+	// path.join *normalizes* `..` rather than rejecting it, and not every path
+	// reaching artifact() is a literal from the pipeline: a JSON items source
+	// spreads arbitrary fields into the template scope, and only `item.id` is
+	// slugged. So `output: draft/${item.stem}.md` with a stem of `../../tmp/x`
+	// wrote outside the workspace, with mkdirSync(recursive) creating the path.
+	it("refuses an artifact path that leaves the workspace", () => {
+		const layout = new RunLayout(workspace, "20260101T000000-abcd");
+
+		expect(layout.artifact("draft/intro.md")).toBe(path.join(workspace, "draft", "intro.md"));
+		// Normalizing within the workspace is still fine.
+		expect(layout.artifact("draft/../final.md")).toBe(path.join(workspace, "final.md"));
+
+		expect(() => layout.artifact("../../../tmp/pwn.md")).toThrow(/outside the workspace/);
+		expect(() => layout.artifact("/etc/passwd")).toThrow(/outside the workspace/);
 	});
 });

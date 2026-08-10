@@ -15,7 +15,14 @@ export interface UsageReport {
 	status: string;
 	rows: UsageRow[];
 	total: StageUsage;
-	/** True when every model in the run priced at zero — a subscription plan. */
+	/**
+	 * True when every step that spent tokens priced at zero — a subscription plan.
+	 *
+	 * Judged per row rather than on the total: a run that mixes a subscription
+	 * model for a thirty-item fan-out with a metered one for a single polish step
+	 * has a non-zero total, so an aggregate test suppressed the note in exactly
+	 * the runs where the unpriced rows dominate the real spend.
+	 */
 	allZeroCost: boolean;
 }
 
@@ -43,7 +50,7 @@ export function buildUsageReport(state: RunState): UsageReport {
 		status: state.status,
 		rows,
 		total,
-		allZeroCost: total.total > 0 && total.cost === 0,
+		allZeroCost: rows.some((row) => row.usage.total > 0 && row.usage.cost === 0),
 	};
 }
 
@@ -91,8 +98,9 @@ export function formatUsageReport(report: UsageReport): string {
 		// provider prices a subscription model at zero in pi's catalog.
 		lines.push(
 			"",
-			"Note: this provider reports zero per-token cost (subscription pricing).",
-			"Token counts are real; the cost column is not a measure of spend here.",
+			"Note: some steps ran on a provider that reports zero per-token cost",
+			"(subscription pricing). Their token counts are real; a $0.0000 row is not",
+			"a measure of spend.",
 		);
 	}
 

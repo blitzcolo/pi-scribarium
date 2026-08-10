@@ -159,10 +159,21 @@ function readStep(
 
 	const outputs = readOutputs(step["output"] ?? step["outputs"], ["steps", index, "output"], ctx);
 
-	if (step["gate"] !== undefined) {
+	// `gate: false` is not a gate. Testing only for `!== undefined` made it one,
+	// and because this branch precedes the agent/builtin check it silently threw
+	// away the step's agent, model, input, and turn budget along the way.
+	const gateValue = step["gate"];
+	if (gateValue !== undefined && gateValue !== null && gateValue !== false) {
+		if (step["agent"] !== undefined || step["builtin"] !== undefined) {
+			throw new PipelineError(
+				`${ctx.at(["steps", index, "gate"])}: step "${id}" sets "gate" as well as ` +
+					`"${step["agent"] !== undefined ? "agent" : "builtin"}". A gate only stops for ` +
+					`a decision; it cannot also run something.`,
+			);
+		}
 		const title =
-			typeof step["gate"] === "string" && step["gate"].trim().length > 0
-				? step["gate"].trim()
+			typeof gateValue === "string" && gateValue.trim().length > 0
+				? gateValue.trim()
 				: `Approve ${id}`;
 		const onReject = optionalString(step["on_reject"], ["steps", index, "on_reject"], ctx);
 		const gate: GateStepSpec = {
@@ -335,6 +346,10 @@ function validateReferences(spec: PipelineSpec, ctx: Context, registry?: AgentRe
 			...((step.kind === "agent" || step.kind === "foreach") && step.input !== undefined
 				? [step.input]
 				: []),
+			// The fan-out source is expanded at run time like every other template,
+			// so an unresolvable reference in it must be caught here rather than
+			// quietly matching no items.
+			...(step.kind === "foreach" ? foreachSourceTemplates(step.source) : []),
 			...(step.kind === "gate" ? step.show : []),
 			...step.outputs,
 			...(step.kind === "builtin" ? Object.values(step.with).filter(isString) : []),
@@ -364,6 +379,17 @@ function validateReferences(spec: PipelineSpec, ctx: Context, registry?: AgentRe
 		}
 
 		producedBy.set(step.id, index);
+	}
+}
+
+function foreachSourceTemplates(source: ForeachSource): string[] {
+	switch (source.kind) {
+		case "glob":
+			return [source.pattern];
+		case "json":
+			return [source.file];
+		case "items":
+			return [];
 	}
 }
 

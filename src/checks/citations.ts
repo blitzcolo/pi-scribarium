@@ -51,8 +51,16 @@ export interface CitationReport {
  * co-authors can be joined ("et al.", "and", "&", ",") is a losing game, and the
  * year is the reliable anchor. Requiring an uppercase first letter and no digits
  * in the author part keeps `[1]`, `[Table 2]`, and `[see below]` out.
+ *
+ * The author part is bounded, and excludes `[`, because `[^\]\d]*?` and `\s+`
+ * both match whitespace: that ambiguity made the match quadratic in the run of
+ * text after an unbalanced `[`, measured at 176 ms for 32k spaces and hours for
+ * a large one. An assembled manuscript with a stray bracket in a code block or a
+ * LaTeX fragment reaches it, and this is a mandatory pipeline stage. The bound
+ * is far longer than any real author list, and matches identically on every
+ * citation form covered by the tests.
  */
-const CITATION = /\[\s*(\p{Lu}[^\]\d]*?)\s+(\d{4}[a-z]?)\s*\]/gu;
+const CITATION = /\[\s*(\p{Lu}[^\]\[\d]{0,80}?)\s+(\d{4}[a-z]?)\s*\]/gu;
 
 const MARKER = /\b(EVIDENCE NEEDED|CITATION NEEDED|SECTION MISSING)\b\s*:?\s*(.*)/;
 
@@ -136,23 +144,20 @@ function extractCitations(text: string, index: SourceIndex): CitationFinding[] {
 		const raw = match[0];
 		if (seen.has(raw)) continue;
 
-		// The first token is the surname that will appear in a bibliography;
-		// "et al." and co-author names are noise for this purpose.
-		const surname = (match[1] ?? "").split(/\s+/)[0] ?? "";
+		const surname = leadName(match[1] ?? "");
 		const year = match[2] ?? "";
-		const surnameKey = surname.toLowerCase();
 		// Strip a disambiguating suffix: 2020a and 2020b are both the year 2020.
 		const yearKey = year.slice(0, 4);
+		const hasSurname = wordMatcher(surname);
+		const hasYear = wordMatcher(yearKey);
 
-		const withBoth = index.documents.find(
-			(doc) => doc.text.includes(surnameKey) && doc.text.includes(yearKey),
-		);
+		const withBoth = index.documents.find((doc) => hasSurname(doc.text) && hasYear(doc.text));
 		if (withBoth !== undefined) {
 			seen.set(raw, { raw, surname, year, verdict: "supported", foundIn: withBoth.path });
 			continue;
 		}
 
-		const withSurname = index.documents.find((doc) => doc.text.includes(surnameKey));
+		const withSurname = index.documents.find((doc) => hasSurname(doc.text));
 		seen.set(
 			raw,
 			withSurname === undefined
@@ -162,6 +167,59 @@ function extractCitations(text: string, index: SourceIndex): CitationFinding[] {
 	}
 
 	return [...seen.values()];
+}
+
+/**
+ * The surname a bibliography will be sorted under.
+ *
+ * Taking the first whitespace token was wrong in two common shapes. In
+ * `[Smith, 2020]` the comma binds to the author part, so the key became
+ * "smith," — while `[Smith et al., 2020]` correctly gave "smith", so the same
+ * author resolved differently depending on how many co-authors they had. And a
+ * multi-word surname collapsed to its particle: `[Van Dijk 2019]` looked up
+ * "van", `[De la Cruz 2001]` looked up "de".
+ *
+ * Leading particles are kept with the name that follows them, and trailing
+ * punctuation is dropped.
+ */
+const PARTICLES = new Set(["van", "von", "de", "del", "della", "da", "di", "du", "la", "le", "el", "al", "bin", "ibn", "ter", "ten", "op"]);
+
+function leadName(authors: string): string {
+	const words = authors
+		.split(/\s+/)
+		.map((word) => word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ""))
+		.filter((word) => word.length > 0);
+
+	const parts: string[] = [];
+	for (const word of words) {
+		parts.push(word);
+		// "et al." is not a name; stop before it either way.
+		if (word.toLowerCase() === "et") {
+			parts.pop();
+			break;
+		}
+		if (!PARTICLES.has(word.toLowerCase())) break;
+	}
+	return parts.join(" ");
+}
+
+/**
+ * Match a key as a whole word rather than as a substring.
+ *
+ * `doc.text.includes("li")` is true of any document containing "quality", and
+ * `includes("he")` of any containing "the" — so a fabricated citation with a
+ * short surname was reported as supported, with a `foundIn` path that was pure
+ * coincidence. Since an unsupported citation fails the step, the reverse error
+ * is just as costly.
+ */
+function wordMatcher(key: string): (text: string) => boolean {
+	const trimmed = key.trim().toLowerCase();
+	if (trimmed.length === 0) return () => false;
+	const pattern = new RegExp(
+		`(?<![\\p{L}\\p{N}])${trimmed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "[\\s]+")}(?![\\p{L}\\p{N}])`,
+		"u",
+	);
+	return (text: string) => pattern.test(text);
 }
 
 function extractMarkers(text: string): MarkerFinding[] {
