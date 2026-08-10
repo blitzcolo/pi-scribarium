@@ -118,7 +118,7 @@ git tag v<version> && git push origin v<version>
   `lib/commands/publish.js` guards its own private check with `if (workspace && manifest.private)`,
   so a non-workspace package skips it, and the unconditional check lives in
   `libnpmpublish/lib/publish.js` — which sits behind `if (!dryRun)`. A real `npm publish` therefore
-  throws `EPRIVATE` before uploading anything, but a dry-run prints `+ pi-scribarium@0.1.0` and
+  throws `EPRIVATE` before uploading anything, but a dry-run prints `+ pi-scribarium@0.2.0` and
   looks like it worked. Do not use `--dry-run` to test whether `private` is effective.
 - **`prepack` runs the build**, so a packed tarball can never contain a stale `dist/`. There is no
   `prepublishOnly`: `private` makes it unreachable, and the gate it held now lives in `release`.
