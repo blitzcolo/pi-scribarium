@@ -280,6 +280,18 @@ ${extra}
 		expect(inline.steps[0]).toMatchObject({ source: { kind: "items" } });
 	});
 
+	// "Every declared output is newer than its source" is vacuously true when
+	// nothing is declared, so this would report every item cached and run none.
+	it("refuses cache on a step that declares no output", () => {
+		expect(() =>
+			parsePipeline(
+				`steps:\n  - id: w\n    agent: outliner\n    foreach: "corpus/text/*.md"\n    cache: true\n`,
+				FILE,
+				registry("outliner"),
+			),
+		).toThrow(/cache requires at least one output/);
+	});
+
 	it("honours parallel and max_failures, and caps concurrency", () => {
 		const spec = parsePipeline(base("    parallel: 6\n    max_failures: 2"), FILE, registry("outliner"));
 		expect(spec.steps[0]).toMatchObject({ concurrency: 6, maxFailures: 2 });

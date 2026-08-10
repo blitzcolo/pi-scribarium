@@ -21,7 +21,7 @@ import type { GateHandler } from "../gates/types.js";
 import { redactSecrets } from "../util/safety.js";
 import { runBuiltin } from "./builtins.js";
 import { resolveItems } from "./items.js";
-import { mapPool } from "./pool.js";
+import { mapPool, MAX_CONCURRENCY } from "./pool.js";
 import { interpolate, type TemplateScope } from "./template.js";
 import type {
 	AgentStepSpec,
@@ -145,6 +145,11 @@ export async function runPipeline(options: RunPipelineOptions): Promise<RunState
 			// already finished; without this a killed thirty-paper run would pay
 			// for all thirty again.
 			...(existing?.items !== undefined ? { items: existing.items } : {}),
+			// Usage and turns are cumulative *for the step*, across every attempt.
+			// The report answers "what did this step cost", which a resumed run's
+			// final attempt alone does not.
+			...(existing?.usage !== undefined ? { usage: existing.usage } : {}),
+			...(existing?.turns !== undefined ? { turns: existing.turns } : {}),
 		};
 		state.steps[step.id] = stepState;
 		store.save(state);
@@ -162,15 +167,18 @@ export async function runPipeline(options: RunPipelineOptions): Promise<RunState
 		} catch (error) {
 			stepState.status = "failed";
 			stepState.error = {
-				code: "BUILTIN_ERROR",
+				// Not every exception here comes from a builtin: this catch also covers
+				// agent and fan-out steps, where an unresolvable template or an
+				// unreadable item source lands.
+				code: step.kind === "builtin" ? "BUILTIN_ERROR" : "AGENT_ERROR",
 				message: error instanceof Error ? error.message : String(error),
 			};
 		}
 
 		stepState.endedAt = new Date().toISOString();
-		if (stepState.usage !== undefined) {
-			state.usageTotal = addUsage(state.usageTotal, stepState.usage);
-		}
+		// The run total is folded in by whoever spent it, not here: a fan-out adds
+		// each item as it settles, so a run killed at item 290 of 300 keeps the 290
+		// it paid for rather than losing them with the step that never ended.
 		store.save(state);
 		log.append("step_end", {
 			stepId: step.id,
@@ -448,7 +456,12 @@ async function runOneStage(
 	 * what is already running.
 	 */
 	signal?: AbortSignal,
-): Promise<{ outputs: string[]; result: RunStageResult; error?: StepState["error"] }> {
+): Promise<{
+	outputs: string[];
+	result: RunStageResult;
+	error?: StepState["error"];
+	modelRef?: string;
+}> {
 	const { layout, registry, modelRuntime } = options;
 	const stageSignal = signal ?? options.signal;
 	const agent = registry.get(step.agent);
@@ -515,6 +528,7 @@ async function runOneStage(
 		return {
 			outputs,
 			result,
+			...(modelRef !== undefined ? { modelRef } : {}),
 			error: result.error ?? { code: "AGENT_ERROR", message: "stage did not complete" },
 		};
 	}
@@ -527,6 +541,7 @@ async function runOneStage(
 		return {
 			outputs,
 			result,
+			...(modelRef !== undefined ? { modelRef } : {}),
 			error: {
 				code: "MISSING_OUTPUT",
 				message: `declared output(s) not written: ${missing.join(", ")}`,
@@ -534,7 +549,7 @@ async function runOneStage(
 		};
 	}
 
-	return { outputs, result };
+	return { outputs, result, ...(modelRef !== undefined ? { modelRef } : {}) };
 }
 
 async function executeAgent(
@@ -543,10 +558,13 @@ async function executeAgent(
 	options: RunPipelineOptions,
 	state: RunState,
 ): Promise<void> {
-	const { outputs, result, error } = await runOneStage(step, options, state);
+	const { outputs, result, error, modelRef } = await runOneStage(step, options, state);
 
-	stepState.turns = result.turns;
-	stepState.usage = result.usage;
+	// Cumulative across attempts; the run total takes only this attempt's delta.
+	stepState.turns = (stepState.turns ?? 0) + result.turns;
+	stepState.usage = addUsage(stepState.usage ?? emptyUsage(), result.usage);
+	state.usageTotal = addUsage(state.usageTotal, result.usage);
+	if (modelRef !== undefined) stepState.model = modelRef;
 	if (result.sessionFile !== undefined) stepState.sessionFile = result.sessionFile;
 
 	if (error !== undefined) {
@@ -605,13 +623,6 @@ async function executeForeach(
 		return;
 	}
 
-	options.onEvent?.({
-		type: "fanout_start",
-		stepId: step.id,
-		total: items.length,
-		concurrency: Math.min(step.concurrency, items.length),
-	});
-
 	// Two reasons to skip an item, and they are worth distinguishing in the log.
 	// `carried` is resume: this run already did it. `cached` is cross-run: the
 	// output on disk is newer than the source, so re-running would buy an
@@ -638,8 +649,19 @@ async function executeForeach(
 		pending.push(item);
 	}
 
-	let usage = emptyUsage();
-	let turns = 0;
+	options.onEvent?.({
+		type: "fanout_start",
+		stepId: step.id,
+		total: items.length,
+		// Reported after the skips are known and clamped exactly as the pool
+		// clamps, so the number on screen is the number of sessions that will run.
+		concurrency: Math.max(1, Math.min(step.concurrency, pending.length, MAX_CONCURRENCY)),
+	});
+
+	// Cumulative across attempts, so the report answers what the step cost rather
+	// than what its last attempt cost.
+	let usage = stepState.usage ?? emptyUsage();
+	let turns = stepState.turns ?? 0;
 	let completed = carried + cached;
 	let failed = 0;
 
@@ -657,12 +679,15 @@ async function executeForeach(
 		store.save(state);
 	}
 
-	const settled = await mapPool(
+	await mapPool(
 		pending,
 		step.concurrency,
 		async (item, _index, itemSignal) => await runOneStage(step, options, state, item, itemSignal),
 		{
 			...(step.maxFailures !== undefined ? { maxFailures: step.maxFailures } : {}),
+			// A stage that ran and reported it never wrote its output resolves
+			// rather than throws, and is the failure that actually dominates.
+			isFailure: (value) => value.error !== undefined,
 			...(options.signal !== undefined ? { signal: options.signal } : {}),
 			onSettled: (index, outcome) => {
 				const item = pending[index] as ForeachItem;
@@ -684,9 +709,36 @@ async function executeForeach(
 				if (outcome.ok) {
 					usage = addUsage(usage, outcome.value.result.usage);
 					turns += outcome.value.result.turns;
+					if (outcome.value.modelRef !== undefined) stepState.model = outcome.value.modelRef;
+					// Folded into the run total here, not at step end: a fan-out killed
+					// at item 290 of 300 never reaches its end, and the resumed attempt
+					// counts only new items — so all 290 items' spend would vanish.
+					state.usageTotal = addUsage(state.usageTotal, outcome.value.result.usage);
 				}
 				if (entry.status === "completed") completed++;
-				else failed++;
+				else {
+					failed++;
+					// Whatever the item managed to write is not a result. Left in the
+					// workspace a truncated card is indistinguishable from a finished
+					// one: `build-index` collates it, a writer cites it, and `cache:` —
+					// which asks only whether the output is newer than its source —
+					// serves it as a hit to every later run. Keep it where it can be
+					// inspected instead.
+					const moved = outcome.ok
+						? quarantineFailedOutputs(
+								options.layout,
+								step.id,
+								stepState.attempts,
+								outcome.value.outputs,
+							)
+						: [];
+					if (moved.length > 0) {
+						options.onEvent?.({
+							type: "log",
+							message: `      ${item.id}: set aside partial output (${moved.join(", ")})`,
+						});
+					}
+				}
 
 				(stepState.items ??= {})[item.id] = entry;
 				stepState.usage = usage;
@@ -751,6 +803,44 @@ async function executeForeach(
 	// Consumed: the feedback has been folded into this attempt's prompts. Left in
 	// place it would also disable `cache:` for this step for the rest of the run.
 	delete stepState.pendingFeedback;
+}
+
+/**
+ * Move aside whatever a failed fan-out item managed to write.
+ *
+ * A stage that blew its turn budget mid-revision leaves a truncated file behind.
+ * The declared-output contract already refuses to call the item successful, but
+ * the file itself stays in the workspace, where nothing can tell it from a
+ * finished artifact. Moving it under the run's attempts directory keeps it
+ * available for inspection without letting it pass as a result.
+ */
+function quarantineFailedOutputs(
+	layout: RunLayout,
+	stepId: string,
+	attempt: number,
+	outputs: readonly string[],
+): string[] {
+	const moved: string[] = [];
+	for (const relative of outputs) {
+		const source = layout.artifact(relative);
+		const extension = path.extname(relative);
+		const base = relative.slice(0, relative.length - extension.length);
+		const target = path.join(
+			layout.attemptsDir,
+			stepId,
+			`${base}.failed-attempt${attempt}${extension}`,
+		);
+		try {
+			if (!fs.existsSync(source)) continue;
+			fs.mkdirSync(path.dirname(target), { recursive: true });
+			fs.renameSync(source, target);
+			moved.push(relative);
+		} catch {
+			// Best effort. A partial artifact left in place is bad; failing the whole
+			// fan-out because one could not be moved would be worse.
+		}
+	}
+	return moved;
 }
 
 function buildTask(

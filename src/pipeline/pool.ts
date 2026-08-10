@@ -7,6 +7,16 @@ export type Settled<T> = { ok: true; value: T } | { ok: false; error: Error };
 export interface MapPoolOptions<T> {
 	/** Stop scheduling new work once this many items have failed. */
 	maxFailures?: number;
+	/**
+	 * Whether a *returned* value counts as a failure against the budget.
+	 *
+	 * Without this the budget only ever sees a thrown `fn`, and the failure that
+	 * actually dominates — a stage that ran to completion and reported it never
+	 * wrote its declared output — resolves rather than throws. `max_failures: 5`
+	 * would then run all three hundred items and fail the step afterwards, having
+	 * paid for exactly what the budget existed to avoid.
+	 */
+	isFailure?: (value: T) => boolean;
 	/** External cancellation. */
 	signal?: AbortSignal;
 	/** Called as each item settles, in completion order — used to checkpoint. */
@@ -47,6 +57,7 @@ export async function mapPool<I, O>(
 
 	let next = 0;
 	let failures = 0;
+	let observerError: unknown;
 
 	const worker = async (): Promise<void> => {
 		for (;;) {
@@ -69,16 +80,33 @@ export async function mapPool<I, O>(
 			}
 
 			results[index] = settled;
-			options.onSettled?.(index, settled);
+			try {
+				options.onSettled?.(index, settled);
+			} catch (error) {
+				// The observer checkpoints to disk, so this is a real failure and must
+				// not be swallowed — but throwing from inside a worker would leave its
+				// siblings running detached, still billing and still writing to shared
+				// state after the caller has already reported a result. Stop the pool
+				// and rethrow once everything has settled.
+				observerError ??= error;
+				internal.abort();
+				return;
+			}
 
-			if (!settled.ok && options.maxFailures !== undefined && ++failures >= options.maxFailures) {
+			const isFailure = !settled.ok || (options.isFailure?.(settled.value) ?? false);
+			if (isFailure && options.maxFailures !== undefined && ++failures >= options.maxFailures) {
 				internal.abort();
 				return;
 			}
 		}
 	};
 
-	await Promise.all(Array.from({ length: limit }, worker));
+	// allSettled, not all: a worker that rejects unexpectedly must not abandon the
+	// others mid-flight. Any rejection is rethrown once they have all stopped.
+	const outcomes = await Promise.allSettled(Array.from({ length: limit }, worker));
+	if (observerError !== undefined) throw observerError;
+	const rejected = outcomes.find((outcome) => outcome.status === "rejected");
+	if (rejected !== undefined) throw rejected.reason;
 
 	// Items never started because the run was cut short still need a value.
 	for (let i = 0; i < results.length; i++) {

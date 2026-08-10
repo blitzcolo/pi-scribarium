@@ -117,6 +117,25 @@ describe("mapPool", () => {
 			expect(results[19]?.ok === false ? results[19].error.message : "").toMatch(/cancelled/);
 		});
 
+		// The failure that dominates in practice — a stage that ran and reported it
+		// never wrote its declared output — resolves rather than throws, so a budget
+		// that only counted rejections would run every item before giving up.
+		it("counts a failure the item reported rather than threw", async () => {
+			const started: number[] = [];
+			await mapPool(
+				Array.from({ length: 20 }, (_, i) => i),
+				1,
+				async (i) => ({ failed: true, i }),
+				{
+					maxFailures: 3,
+					isFailure: (value) => value.failed,
+					onStart: (index) => started.push(index),
+				},
+			);
+
+			expect(started).toHaveLength(3);
+		});
+
 		it("does not trip while failures stay under budget", async () => {
 			const results = await mapPool([0, 1, 2, 3], 2, async (i) => {
 				if (i === 0) throw new Error("only one");
@@ -145,6 +164,34 @@ describe("mapPool", () => {
 		// launching sessions bills the user for work they asked it to stop.
 		expect(observed).toEqual([false]);
 		expect(results[1]?.ok === false ? results[1].error.message : "").toMatch(/cancelled/);
+	});
+
+	// The observer checkpoints to disk, so a throw there is real and must surface.
+	// It must not surface by rejecting a worker mid-loop, though: that leaves the
+	// siblings running detached, still billing and still writing shared state after
+	// the caller has already been handed a result.
+	it("reports an observer failure without abandoning the running workers", async () => {
+		const finished: number[] = [];
+		await expect(
+			mapPool(
+				Array.from({ length: 10 }, (_, i) => i),
+				2,
+				async (i) => {
+					await tick(2);
+					finished.push(i);
+					return i;
+				},
+				{
+					onSettled: (index) => {
+						if (index === 0) throw new Error("disk full");
+					},
+				},
+			),
+		).rejects.toThrow(/disk full/);
+
+		// Nothing was still in flight when the rejection surfaced, and the pool
+		// stopped rather than working through the remaining eight items.
+		expect(finished.length).toBeLessThan(10);
 	});
 
 	it("handles an empty item list", async () => {

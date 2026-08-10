@@ -14,12 +14,47 @@ import type { ForeachItem, ForeachSource } from "./schema.js";
 export function resolveItems(source: ForeachSource, workspace: string): ForeachItem[] {
 	switch (source.kind) {
 		case "glob":
-			return fromGlob(source.pattern, workspace);
+			return assertDistinctIds(fromGlob(source.pattern, workspace));
 		case "json":
-			return fromJson(source.file, source.path, workspace);
+			return assertDistinctIds(fromJson(source.file, source.path, workspace));
 		case "items":
-			return source.values.map((value, index) => toItem(value, index));
+			return assertDistinctIds(source.values.map((value, index) => toItem(value, index)));
 	}
+}
+
+/**
+ * Refuse a fan-out whose items share an id.
+ *
+ * The loader already rejects an output that does not mention `${item.*}`,
+ * because otherwise every item writes one path and N concurrent sessions race on
+ * it. Two items with the same id reintroduce exactly that race, and quietly: the
+ * id is slugged from a filename stem, so `a/x.md` and `b/x.md`, or `Smith 2020.md`
+ * beside `smith-2020.md`, collide. Only one survives in `status.json`, and on
+ * resume the loser looks already done.
+ *
+ * Refusing beats disambiguating. A generated suffix depends on iteration order,
+ * so adding one file would silently rebind every later id — and ids have to be
+ * stable across runs or neither resume nor `cache:` can match an output to its
+ * source.
+ */
+function assertDistinctIds(items: ForeachItem[]): ForeachItem[] {
+	const seen = new Map<string, ForeachItem>();
+	for (const item of items) {
+		const first = seen.get(item.id);
+		if (first !== undefined) {
+			throw new PipelineError(
+				`Fan-out items collide on id "${item.id}": ${describe(first)} and ${describe(item)} ` +
+					`would write the same output path and race on it. Rename one, or give the ` +
+					`items explicit distinct ids.`,
+			);
+		}
+		seen.set(item.id, item);
+	}
+	return items;
+}
+
+function describe(item: ForeachItem): string {
+	return item.path ?? `item ${item.index + 1}`;
 }
 
 function fromGlob(pattern: string, workspace: string): ForeachItem[] {

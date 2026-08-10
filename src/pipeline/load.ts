@@ -246,6 +246,16 @@ function readStep(
 			);
 		}
 
+		// "Every declared output is newer than its source" is vacuously true when
+		// nothing is declared, so a cached step without one reports every item
+		// cached and never runs a single session.
+		if (cache && outputs.length === 0) {
+			throw new PipelineError(
+				`${ctx.at(["steps", index, "cache"])}: cache requires at least one output, ` +
+					`or every item counts as cached and the step silently runs nothing`,
+			);
+		}
+
 		// Without an ${item.*} reference every item writes the same path, and N
 		// concurrent sessions race on one file — silently, with the last writer
 		// winning. Cheaper to refuse than to debug.

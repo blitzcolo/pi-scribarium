@@ -165,6 +165,53 @@ describe("foreach fan-out", () => {
 		expect(fs.existsSync(path.join(workspace, "analysis", "paper-10.md"))).toBe(false);
 	});
 
+	// A stage that wrote something and then failed leaves a truncated file behind.
+	// Left in the workspace nothing can tell it from a finished artifact:
+	// build-index collates it, a writer cites it, and `cache:` — which asks only
+	// whether the output is newer than its source — serves it to every later run.
+	it("sets aside what a failed item managed to write", async () => {
+		seedCorpus(3);
+		const written = new Set<string>();
+		const script: Script = (ctx) => {
+			const id = /analysis\/([a-z0-9-]+)\.md/.exec(ctx.systemPrompt + ctx.lastUserText)?.[1];
+			if (id === undefined) return { text: "Done." };
+			if (!written.has(id)) {
+				written.add(id);
+				return {
+					toolCalls: [{ name: "write", args: { path: `analysis/${id}.md`, content: `# ${id}\n` } }],
+				};
+			}
+			// Wrote a partial artifact, then died.
+			if (id === "paper-02") return { error: "provider died mid-revision" };
+			return { text: `Wrote analysis for ${id}.` };
+		};
+
+		const { final } = await execute(PIPELINE(), script);
+
+		expect(final.steps["analyze"]?.items?.["paper-02"]?.status).toBe("failed");
+		// Gone from the workspace, so nothing downstream mistakes it for a result…
+		expect(fs.existsSync(path.join(workspace, "analysis", "paper-02.md"))).toBe(false);
+		// …but kept where it can be inspected.
+		expect(
+			fs.existsSync(
+				path.join(layout.attemptsDir, "analyze", "analysis", "paper-02.failed-attempt1.md"),
+			),
+		).toBe(true);
+
+		// The items that did finish are untouched.
+		expect(fs.existsSync(path.join(workspace, "analysis", "paper-01.md"))).toBe(true);
+		expect(final.steps["analyze"]?.outputs).toEqual([
+			"analysis/paper-01.md",
+			"analysis/paper-03.md",
+		]);
+	});
+
+	it("records the model each step actually ran on", async () => {
+		seedCorpus(2);
+		const { final } = await execute(PIPELINE(), analystScript());
+		expect(final.steps["analyze"]?.model).toBe(SCRIPTED_MODEL_REF);
+	});
+
 	// The whole point of the pool: one unreadable paper must not discard the
 	// twenty-nine already paid for.
 	it("isolates failing items and still completes the rest", async () => {
