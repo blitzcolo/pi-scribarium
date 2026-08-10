@@ -62,7 +62,18 @@ export async function preflightModels(
 ): Promise<void> {
 	const wanted = new Map<string, StageModel>();
 	for (const ref of new Set(modelRefs)) {
-		const { model } = resolveStageModel(modelRuntime, ref);
+		let model: StageModel;
+		try {
+			({ model } = resolveStageModel(modelRuntime, ref));
+		} catch (cause) {
+			// Reached during preflight, so it is a preflight failure (exit 3), not a
+			// generic config error (exit 2). `errors.ts` documents 3 as covering an
+			// unresolvable model, and a CI script branching on it should not have to
+			// know which of the two checks inside preflight tripped.
+			throw new PreflightError(cause instanceof Error ? cause.message : String(cause), {
+				cause,
+			});
+		}
 		wanted.set(`${model.provider}/${model.id}`, model);
 	}
 

@@ -14,7 +14,7 @@ import { buildUsageReport, formatUsageReport } from "../../report/usage.js";
 import { UsageError } from "../../util/errors.js";
 import { findLatestRun, hashPipeline, RunLayout } from "../../workspace/layout.js";
 import { RunStateStore } from "../../workspace/run-state.js";
-import { EXIT_AWAITING_GATE, makeReporter, formatFailures } from "./run-shared.js";
+import { collectModelRefs, EXIT_AWAITING_GATE, makeReporter, formatFailures } from "./run-shared.js";
 
 export interface ResumeOptions {
 	workspace: string;
@@ -76,13 +76,7 @@ export async function commandResume(options: ResumeOptions): Promise<number> {
 	const fallbackModel = options.modelOverride ?? defaults.modelRef;
 	const modelRuntime = await ModelRuntime.create();
 
-	const refs = new Set<string>();
-	for (const step of spec.steps) {
-		if (step.kind !== "agent" && step.kind !== "foreach") continue;
-		const ref = registry.get(step.agent).modelRef ?? step.model ?? fallbackModel;
-		if (ref !== undefined) refs.add(ref);
-	}
-	await preflightModels(modelRuntime, [...refs]);
+	await preflightModels(modelRuntime, collectModelRefs(spec, registry, fallbackModel));
 
 	const done = Object.values(state.steps).filter((s) => s.status === "completed").length;
 	process.stdout.write(`resuming ${runId}  (${done} step(s) already complete)\n\n`);

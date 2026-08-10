@@ -1,6 +1,32 @@
+import type { AgentRegistry } from "../../agents/registry.js";
 import type { PipelineEvent } from "../../pipeline/engine.js";
+import type { PipelineSpec } from "../../pipeline/schema.js";
 import type { RunLayout } from "../../workspace/layout.js";
 import type { RunState } from "../../workspace/run-state.js";
+
+/**
+ * Every model reference a run will need, for preflight.
+ *
+ * Shared by `run` and `resume` because they drifted: `run` checked only
+ * `kind === "agent"` and so skipped every fan-out. That is exactly backwards —
+ * a fan-out is where a wrong model costs the most, and in the shipped pipeline
+ * the fan-outs are the steps most likely to name a *different* provider from
+ * the rest of the run. A missing credential passed preflight, ingest ran, and
+ * then all thirty items failed one at a time.
+ */
+export function collectModelRefs(
+	spec: PipelineSpec,
+	registry: AgentRegistry,
+	fallbackModel?: string,
+): string[] {
+	const refs = new Set<string>();
+	for (const step of spec.steps) {
+		if (step.kind !== "agent" && step.kind !== "foreach") continue;
+		const ref = registry.get(step.agent).modelRef ?? step.model ?? fallbackModel;
+		if (ref !== undefined) refs.add(ref);
+	}
+	return [...refs];
+}
 
 /** A run stopped at a gate, waiting for a human decision. */
 export const EXIT_AWAITING_GATE = 10;

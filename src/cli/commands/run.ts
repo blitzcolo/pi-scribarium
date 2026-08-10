@@ -13,7 +13,7 @@ import { buildUsageReport, formatUsageReport } from "../../report/usage.js";
 import { UsageError } from "../../util/errors.js";
 import { hashPipeline, newRunId, RunLayout } from "../../workspace/layout.js";
 import { RunStateStore } from "../../workspace/run-state.js";
-import { EXIT_AWAITING_GATE, formatFailures, makeReporter } from "./run-shared.js";
+import { collectModelRefs, EXIT_AWAITING_GATE, formatFailures, makeReporter } from "./run-shared.js";
 
 export interface RunCommandOptions {
 	workspace: string;
@@ -49,13 +49,7 @@ export async function commandRun(options: RunCommandOptions): Promise<number> {
 	const fallbackModel = options.modelOverride ?? defaults.modelRef;
 	const modelRuntime = await ModelRuntime.create();
 
-	const refs = new Set<string>();
-	for (const step of spec.steps) {
-		if (step.kind !== "agent") continue;
-		const ref = registry.get(step.agent).modelRef ?? step.model ?? fallbackModel;
-		if (ref !== undefined) refs.add(ref);
-	}
-	await preflightModels(modelRuntime, [...refs]);
+	await preflightModels(modelRuntime, collectModelRefs(spec, registry, fallbackModel));
 
 	const layout = new RunLayout(workspace, newRunId());
 	layout.ensure();
