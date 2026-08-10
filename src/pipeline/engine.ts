@@ -15,6 +15,7 @@ import {
 	type RunState,
 	type StepState,
 } from "../workspace/run-state.js";
+import { clearDecision } from "../gates/file.js";
 import { archiveAttempt, buildRegeneratePrompt } from "../gates/regenerate.js";
 import type { GateHandler } from "../gates/types.js";
 import { redactSecrets } from "../util/safety.js";
@@ -294,13 +295,23 @@ async function executeGate(
 
 		case "reject": {
 			const target = decision.target ?? step.onReject;
-			if (target === undefined || state.steps[target] === undefined) {
+			// The target must be a step of *this* spec that has already run. A
+			// `--force-pipeline` resume can drop a step the run's state still
+			// mentions, and rewinding to a step the spec no longer has would index
+			// the list at -1 and throw outside any handler.
+			const targetIndex =
+				target === undefined
+					? -1
+					: options.spec.steps.findIndex((candidate) => candidate.id === target);
+			if (target === undefined || targetIndex === -1 || state.steps[target] === undefined) {
 				stepState.status = "failed";
 				stepState.error = {
 					code: "BUILTIN_ERROR",
 					message:
-						`rejected, but there is nothing to regenerate: ` +
-						`gate "${step.id}" has no on_reject target`,
+						target === undefined
+							? `rejected, but there is nothing to regenerate: ` +
+								`gate "${step.id}" has no on_reject target`
+							: `rejected, but "${target}" is not a step of this run that has already run`,
 				};
 				store.save(state);
 				return { kind: "abort" };
@@ -308,8 +319,22 @@ async function executeGate(
 
 			const targetState = state.steps[target] as StepState;
 			targetState.pendingFeedback = decision.feedback;
-			// Re-open both the target and this gate so the loop runs them again.
-			targetState.status = "pending";
+
+			// Re-open the target *and everything after it*, not just the target. A
+			// step between the target and this gate was written against the artifact
+			// that is about to change; left `completed`, the main loop skips it and
+			// the gate re-opens showing exactly the output the reviewer just
+			// rejected — an approve/reject loop with nothing changing between turns.
+			// Later gates lose their approval for the same reason it was given: it
+			// was an approval of the old version. Same rule as `scribarium redo`.
+			for (const candidate of options.spec.steps.slice(targetIndex)) {
+				const candidateState = state.steps[candidate.id];
+				if (candidateState === undefined) continue;
+				candidateState.status = "pending";
+				delete candidateState.error;
+				if (candidate.kind === "gate") clearDecision(layout, candidate.id);
+			}
+			// This gate asks again once the work has been regenerated.
 			stepState.status = "awaiting";
 			store.save(state);
 			onEvent?.({ type: "gate_decided", stepId: step.id, decision: "reject", target });
@@ -437,7 +462,10 @@ async function runOneStage(
 	const task = buildTask(step, outputs, scopeWithOutputs);
 
 	const previous = state.steps[step.id];
-	const feedback = item === undefined ? previous?.pendingFeedback : undefined;
+	// Fan-out items get the feedback too. Withholding it made a rejection whose
+	// `on_reject` names a foreach step — which the shipped pipeline does — write
+	// the reviewer's words to disk and then ignore them.
+	const feedback = previous?.pendingFeedback;
 	const finalTask =
 		feedback === undefined
 			? task
@@ -548,12 +576,27 @@ async function executeForeach(
 	store: RunStateStore,
 ): Promise<void> {
 	const items = resolveItems(step.source, options.layout.workspace);
-	const previous = stepState.items ?? {};
+
+	// A rejection asks for this step to be done again, so an item completed under
+	// an *earlier* attempt no longer counts as done — carrying them all forward
+	// left nothing to run and re-completed the step having done nothing at all.
+	// An item completed during *this* attempt still counts, or a regeneration
+	// killed halfway would start over from the beginning.
+	const recorded = stepState.items ?? {};
+	const previous =
+		stepState.pendingFeedback === undefined
+			? recorded
+			: Object.fromEntries(
+					Object.entries(recorded).filter(([, entry]) => entry.attempt === stepState.attempts),
+				);
 	stepState.items = { ...previous };
 
 	if (items.length === 0) {
 		if (step.optional === true) {
 			stepState.status = "skipped";
+			// Nothing matched, so there is nothing the feedback could be applied to.
+			// Left in place it would disable this step's cache for the rest of the run.
+			delete stepState.pendingFeedback;
 			options.onEvent?.({ type: "log", message: `      no items; skipping ${step.id}` });
 			return;
 		}
@@ -585,7 +628,11 @@ async function executeForeach(
 		const fresh = cachedOutputs(step, item, options, state);
 		if (fresh !== null) {
 			cached++;
-			(stepState.items ??= {})[item.id] = { status: "completed", outputs: fresh };
+			(stepState.items ??= {})[item.id] = {
+				status: "completed",
+				outputs: fresh,
+				attempt: stepState.attempts,
+			};
 			continue;
 		}
 		pending.push(item);
@@ -621,9 +668,14 @@ async function executeForeach(
 				const item = pending[index] as ForeachItem;
 				const entry =
 					outcome.ok && outcome.value.error === undefined
-						? { status: "completed" as const, outputs: outcome.value.outputs }
+						? {
+								status: "completed" as const,
+								outputs: outcome.value.outputs,
+								attempt: stepState.attempts,
+							}
 						: {
 								status: "failed" as const,
+								attempt: stepState.attempts,
 								error: outcome.ok
 									? (outcome.value.error ?? { code: "AGENT_ERROR" as const, message: "failed" })
 									: { code: "AGENT_ERROR" as const, message: outcome.error.message },
@@ -679,6 +731,7 @@ async function executeForeach(
 
 	if (failed === 0) {
 		stepState.status = "completed";
+		delete stepState.pendingFeedback;
 		return;
 	}
 
@@ -695,6 +748,9 @@ async function executeForeach(
 		return;
 	}
 	stepState.status = "completed";
+	// Consumed: the feedback has been folded into this attempt's prompts. Left in
+	// place it would also disable `cache:` for this step for the rest of the run.
+	delete stepState.pendingFeedback;
 }
 
 function buildTask(

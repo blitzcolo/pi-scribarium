@@ -61,6 +61,30 @@ steps:
     output: draft/paper.md
 `;
 
+/**
+ * The shape the shipped pipeline actually uses: a gate rejecting back into a
+ * fan-out, with a step in between that was written against its output.
+ */
+const FANOUT_PIPELINE = `
+steps:
+  - id: write
+    agent: writer
+    foreach:
+      items:
+        - id: intro
+        - id: methods
+    input: Draft section \${item.id}.
+    output: draft/\${item.id}.md
+  - id: assemble
+    agent: outliner
+    input: Assemble the draft.
+    output: draft/paper.md
+  - id: approve-draft
+    gate: Approve the draft
+    show: draft/paper.md
+    on_reject: write
+`;
+
 /** Writes each step's declared output once, then reports done. */
 function scribe(): Script {
 	const written = new Set<string>();
@@ -87,14 +111,15 @@ async function execute(
 	script: Script,
 	state?: RunState,
 	scripted?: ScriptedRuntime,
+	source: string = PIPELINE,
 ): Promise<{ final: RunState; scripted: ScriptedRuntime }> {
-	const spec = parsePipeline(PIPELINE, path.join(workspace, "pipeline.yaml"), registry);
+	const spec = parsePipeline(source, path.join(workspace, "pipeline.yaml"), registry);
 	const runtime = scripted ?? (await createScriptedRuntime(agentDir, script));
 	const runState =
 		state ??
 		RunStateStore.create(
 			layout,
-			initialRunState({ spec, layout, pipelineHash: hashPipeline(PIPELINE) }),
+			initialRunState({ spec, layout, pipelineHash: hashPipeline(source) }),
 		);
 
 	const final = await runPipeline({
@@ -176,6 +201,41 @@ describe("gates", () => {
 
 		const decisions = final.steps["approve-outline"]?.decisions ?? [];
 		expect(decisions[0]).toMatchObject({ kind: "reject", feedback: "Add a limitations subsection." });
+	});
+
+	// The shipped pipeline rejects `approve-review` back into `write`, a fan-out,
+	// with `assemble` and `review` in between. Both halves of that used to fail:
+	// fan-out items never saw the feedback and were all carried forward as already
+	// complete, so the step re-completed having run nothing; and the steps between
+	// the target and the gate stayed `completed`, so the gate re-opened on exactly
+	// the artifact the reviewer had just rejected.
+	it("re-runs a rejected fan-out, and every step between it and the gate", async () => {
+		const script = scribe();
+		const first = await execute(script, undefined, undefined, FANOUT_PIPELINE);
+		expect(first.final.status).toBe("awaiting_gate");
+		expect(first.final.steps["assemble"]?.attempts).toBe(1);
+
+		writeDecision(layout, "approve-draft", {
+			kind: "reject",
+			feedback: "Tighten the methods.",
+		});
+		const second = await execute(script, first.final, first.scripted, FANOUT_PIPELINE);
+
+		// Every item was drafted again, with the reviewer's words in its prompt.
+		for (const id of ["intro", "methods"]) {
+			expect(fs.readFileSync(path.join(workspace, "draft", `${id}.md`), "utf-8")).toContain(
+				"Addressed: Tighten the methods.",
+			);
+		}
+		expect(Object.keys(second.final.steps["write"]?.items ?? {})).toHaveLength(2);
+
+		// The step in between ran again rather than being skipped as complete.
+		expect(second.final.steps["assemble"]?.attempts).toBe(2);
+
+		// The regenerated work needs approval of its own.
+		expect(second.final.status).toBe("awaiting_gate");
+		// Consumed, so the step is not left permanently uncacheable.
+		expect(second.final.steps["write"]?.pendingFeedback).toBeUndefined();
 	});
 
 	it("consumes a decision so the regenerated work is reviewed again", async () => {

@@ -36,8 +36,17 @@ export interface StepState {
 	model?: string;
 	sessionFile?: string;
 	error?: StepError;
-	/** Populated for fan-out steps. */
-	items?: Record<string, { status: StepStatus; outputs?: string[]; error?: StepError }>;
+	/**
+	 * Populated for fan-out steps.
+	 *
+	 * `attempt` records which attempt of the step produced the entry, so a
+	 * regeneration can tell work done for the reviewer's feedback from work done
+	 * before it, and carry forward only the former.
+	 */
+	items?: Record<
+		string,
+		{ status: StepStatus; outputs?: string[]; error?: StepError; attempt?: number }
+	>;
 	/** Gate steps: every decision taken, in order. */
 	decisions?: GateDecisionRecord[];
 	/** Feedback to fold into the next run of this step, set by a rejection. */
