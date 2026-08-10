@@ -59,7 +59,18 @@ steps:
 ${extra}
 `;
 
-async function execute(source: string, script: Script) {
+/** One item at a time, so a cancellation lands at a predictable point. */
+const SERIAL_PIPELINE = `
+steps:
+  - id: analyze
+    agent: analyst
+    foreach: "corpus/text/*.md"
+    parallel: 1
+    input: Analyse \${item.path}.
+    output: analysis/\${item.id}.md
+`;
+
+async function execute(source: string, script: Script, signal?: AbortSignal) {
 	const spec = parsePipeline(source, path.join(workspace, "pipeline.yaml"), registry);
 	const scripted = await createScriptedRuntime(agentDir, script);
 	const state = RunStateStore.create(
@@ -75,6 +86,7 @@ async function execute(source: string, script: Script) {
 		registry,
 		modelRuntime: scripted.runtime,
 		agentDir,
+		...(signal !== undefined ? { signal } : {}),
 		onEvent: (event) => events.push(event),
 	});
 	return { final, scripted, events };
@@ -121,6 +133,36 @@ describe("foreach fan-out", () => {
 
 		const start = events.find((e) => e.type === "fanout_start");
 		expect(start).toMatchObject({ total: 30, concurrency: 4 });
+	});
+
+	// Ctrl-C must stop the run, not merely stop steering it. An already-aborted
+	// signal never dispatches `abort` again, so a stage that only registers a
+	// listener would run to full paid completion — and with the step then marked
+	// completed, resume would skip the items that never ran.
+	it("starts nothing new once the run is cancelled, and does not call the step done", async () => {
+		seedCorpus(10);
+		const controller = new AbortController();
+		const seen = new Set<string>();
+		const analyst = analystScript();
+		const script: Script = (ctx) => {
+			const id = /analysis\/([a-z0-9-]+)\.md/.exec(ctx.systemPrompt + ctx.lastUserText)?.[1];
+			if (id !== undefined) seen.add(id);
+			// Cancel once a second paper is under way.
+			if (seen.size === 2) controller.abort();
+			return analyst(ctx);
+		};
+
+		const { final } = await execute(SERIAL_PIPELINE, script, controller.signal);
+
+		expect(final.steps["analyze"]?.status).toBe("failed");
+		expect(final.steps["analyze"]?.error?.code).toBe("EXTERNAL_ABORT");
+		expect(final.status).toBe("aborted");
+
+		// Only the papers already under way reached the provider; the remaining
+		// eight were never started and were never billed.
+		expect(seen.size).toBeLessThan(4);
+		expect(Object.keys(final.steps["analyze"]?.items ?? {}).length).toBeLessThan(4);
+		expect(fs.existsSync(path.join(workspace, "analysis", "paper-10.md"))).toBe(false);
 	});
 
 	// The whole point of the pool: one unreadable paper must not discard the

@@ -50,9 +50,12 @@ export async function mapPool<I, O>(
 
 	const worker = async (): Promise<void> => {
 		for (;;) {
-			// Only stop early when a failure budget is in force; an external abort
-			// is still delivered to `fn` via the signal so it can wind down.
-			if (internal.signal.aborted) return;
+			// Stop scheduling on either abort: the internal one a spent failure
+			// budget raises, and an external cancel. Work already in flight is
+			// wound down through the signal handed to `fn`, but nothing new may
+			// start — a cancelled run that keeps launching sessions bills the user
+			// for every item they asked it not to run.
+			if (signal.aborted) return;
 
 			const index = next++;
 			if (index >= items.length) return;

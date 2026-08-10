@@ -131,6 +131,28 @@ export async function runStage(options: RunStageOptions): Promise<RunStageResult
 	const startedAt = Date.now();
 	const { agent, modelRuntime, onEvent } = options;
 
+	// A signal that has already fired never dispatches `abort` again, so the
+	// listener registered below would never run: the stage would build a session
+	// and bill a full run for work the user has already cancelled. Refuse before
+	// anything is created. This is the common case in a fan-out, where the pool
+	// hands every queued item the same run-wide signal.
+	if (options.signal?.aborted === true) {
+		return {
+			status: "aborted",
+			error: { code: "EXTERNAL_ABORT", message: "cancelled before the stage started" },
+			text: "",
+			truncated: false,
+			turns: 0,
+			softWarned: false,
+			retries: 0,
+			compactions: 0,
+			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, cost: 0 },
+			contextPercent: null,
+			sessionId: "",
+			durationMs: Date.now() - startedAt,
+		};
+	}
+
 	const modelRef = agent.modelRef ?? options.defaultModelRef;
 	const resolved = modelRef !== undefined ? resolveStageModel(modelRuntime, modelRef) : undefined;
 	if (resolved?.warning !== undefined) {
@@ -239,6 +261,11 @@ export async function runStage(options: RunStageOptions): Promise<RunStageResult
 	const timer =
 		agent.timeoutMs !== undefined
 			? setTimeout(() => {
+					// A cancel already under way owns the outcome. abort() is
+					// cooperative, so the settle can outlast the deadline, and a timer
+					// firing during that drain would relabel a user's Ctrl-C as a
+					// timeout — which `classify` ranks higher, turning exit 130 into 1.
+					if (cancelled) return;
 					timedOut = true;
 					cancel();
 				}, agent.timeoutMs)
@@ -252,6 +279,10 @@ export async function runStage(options: RunStageOptions): Promise<RunStageResult
 	} catch (error) {
 		thrown = error instanceof Error ? error.message : String(error);
 	} finally {
+		// Disarmed before the drain, not after it: waitForIdle() waits out a turn
+		// already in flight, and a timer still armed across that window would fire
+		// on a stage that has in fact already finished.
+		if (timer !== undefined) clearTimeout(timer);
 		await session.waitForIdle().catch(() => {});
 	}
 
@@ -264,7 +295,6 @@ export async function runStage(options: RunStageOptions): Promise<RunStageResult
 
 	unsubscribe();
 	options.signal?.removeEventListener("abort", onExternalAbort);
-	if (timer !== undefined) clearTimeout(timer);
 	await settingsManager.flush().catch(() => {});
 	session.dispose();
 

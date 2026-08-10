@@ -84,6 +84,15 @@ export async function runPipeline(options: RunPipelineOptions): Promise<RunState
 	// step, which a simple iteration cannot express.
 	let index = 0;
 	while (index < spec.steps.length) {
+		// An abort delivered between steps has no stage to interrupt, so nothing
+		// else would notice it: the loop would calmly start the next step.
+		if (options.signal?.aborted === true) {
+			state.status = "aborted";
+			store.save(state);
+			log.append("run_end", { status: "aborted" });
+			return state;
+		}
+
 		const step = spec.steps[index] as StepSpec;
 		const existing = state.steps[step.id];
 		if (existing?.status === "completed" || existing?.status === "skipped") {
@@ -407,8 +416,16 @@ async function runOneStage(
 	options: RunPipelineOptions,
 	state: RunState,
 	item?: ForeachItem,
+	/**
+	 * Cancellation for this stage. A fan-out passes the pool's own composed
+	 * signal, which also fires when a failure budget is spent; without it
+	 * `max_failures` could only decline to schedule more work, never wind down
+	 * what is already running.
+	 */
+	signal?: AbortSignal,
 ): Promise<{ outputs: string[]; result: RunStageResult; error?: StepState["error"] }> {
 	const { layout, registry, modelRuntime } = options;
+	const stageSignal = signal ?? options.signal;
 	const agent = registry.get(step.agent);
 	const scope = baseScope(options, state, item);
 
@@ -460,7 +477,7 @@ async function runOneStage(
 		sessionDir: layout.sessionsDir,
 		...(modelRef !== undefined ? { defaultModelRef: modelRef } : {}),
 		...(options.defaultThinking !== undefined ? { defaultThinking: options.defaultThinking } : {}),
-		...(options.signal !== undefined ? { signal: options.signal } : {}),
+		...(stageSignal !== undefined ? { signal: stageSignal } : {}),
 		onEvent: (event) => options.onEvent?.({ type: "stage", stepId: step.id, event, ...(item !== undefined ? { itemId: item.id } : {}) }),
 	});
 
@@ -596,7 +613,7 @@ async function executeForeach(
 	const settled = await mapPool(
 		pending,
 		step.concurrency,
-		async (item) => await runOneStage(step, options, state, item),
+		async (item, _index, itemSignal) => await runOneStage(step, options, state, item, itemSignal),
 		{
 			...(step.maxFailures !== undefined ? { maxFailures: step.maxFailures } : {}),
 			...(options.signal !== undefined ? { signal: options.signal } : {}),
@@ -646,6 +663,19 @@ async function executeForeach(
 	stepState.outputs = Object.values(stepState.items ?? {})
 		.filter((entry) => entry.status === "completed")
 		.flatMap((entry) => entry.outputs ?? []);
+
+	// A cancelled fan-out is not a partial success. Without this the common case —
+	// Ctrl-C with no `max_failures` set — leaves `failed` at just the handful that
+	// were in flight, the step is marked completed, and the main loop then skips it
+	// forever on resume: the items that never ran are silently lost.
+	if (options.signal?.aborted === true) {
+		stepState.status = "failed";
+		stepState.error = {
+			code: "EXTERNAL_ABORT",
+			message: `cancelled after ${completed} of ${items.length} item(s)`,
+		};
+		return;
+	}
 
 	if (failed === 0) {
 		stepState.status = "completed";

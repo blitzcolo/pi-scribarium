@@ -127,7 +127,7 @@ describe("mapPool", () => {
 		});
 	});
 
-	it("passes a signal that an external abort propagates to", async () => {
+	it("hands running work a signal and starts nothing after an external abort", async () => {
 		const controller = new AbortController();
 		const observed: boolean[] = [];
 
@@ -138,11 +138,13 @@ describe("mapPool", () => {
 		}, { signal: controller.signal });
 
 		controller.abort();
-		await pending;
+		const results = await pending;
 
-		// The first item started before the abort; the second saw it.
-		expect(observed[0]).toBe(false);
-		expect(observed[1]).toBe(true);
+		// The first item started before the abort and is left to wind down through
+		// the signal. The second must never start: a cancelled run that keeps
+		// launching sessions bills the user for work they asked it to stop.
+		expect(observed).toEqual([false]);
+		expect(results[1]?.ok === false ? results[1].error.message : "").toMatch(/cancelled/);
 	});
 
 	it("handles an empty item list", async () => {

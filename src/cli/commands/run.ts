@@ -74,7 +74,7 @@ export async function commandRun(options: RunCommandOptions): Promise<number> {
 	const reporter = makeReporter(options.quiet);
 	const controller = new AbortController();
 	const onSigint = (): void => {
-		process.stderr.write("\ninterrupted; finishing the current step then stopping\n");
+		process.stderr.write("\ninterrupted; stopping (resume this run to continue)\n");
 		controller.abort();
 	};
 	process.on("SIGINT", onSigint);
