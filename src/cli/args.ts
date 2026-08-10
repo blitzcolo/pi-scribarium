@@ -17,7 +17,37 @@ export interface ParsedArgs {
 	repeated: ReadonlyMap<string, string[]>;
 }
 
-export function parseArgs(argv: readonly string[]): ParsedArgs {
+/**
+ * Flags that never take a value.
+ *
+ * Without this list a boolean flag swallows the token after it, which is not an
+ * error and so acts on the wrong thing silently: `run --quiet paper.yaml` ran
+ * the default pipeline rather than the named one, and `approve -y run-123`
+ * approved whichever run happened to be latest.
+ */
+export const BOOLEAN_FLAGS: readonly string[] = [
+	"force",
+	"force-pipeline",
+	"help",
+	"h",
+	"json",
+	"quiet",
+	"q",
+	"strict",
+	"version",
+	"v",
+	"yes",
+	"y",
+];
+
+/** Spellings of `false` accepted for an explicit `--flag=false`. */
+const FALSEY = new Set(["false", "0", "no", "off"]);
+
+export function parseArgs(
+	argv: readonly string[],
+	booleans: readonly string[] = BOOLEAN_FLAGS,
+): ParsedArgs {
+	const isBoolean = new Set(booleans);
 	const flags = new Map<string, string | true>();
 	const repeated = new Map<string, string[]>();
 	const positionals: string[] = [];
@@ -46,11 +76,11 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
 		}
 
 		// Long and short flags behave identically: a flag takes the following
-		// token as its value unless that token is itself a flag. Keeping the two
-		// forms uniform avoids a `-w /tmp` that silently parses as a boolean plus
-		// a stray positional. The cost is that a boolean short flag must not be
-		// written immediately before a positional (`-q writer`); every documented
-		// invocation puts positionals first.
+		// token as its value unless that token is itself a flag, or the flag is a
+		// known boolean. Keeping the two forms uniform avoids a `-w /tmp` that
+		// silently parses as a boolean plus a stray positional; knowing which
+		// flags are boolean avoids the mirror-image bug, where `--quiet paper.yaml`
+		// ate the positional and ran the default pipeline instead.
 		// A flag is a dash followed by a letter. Anything else beginning with a
 		// dash is a value: review feedback is written as a markdown list, so
 		// `-m "- first point"` is the common case, and negative numbers likewise.
@@ -62,7 +92,7 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
 				continue;
 			}
 			const next = argv[i + 1];
-			if (next !== undefined && !/^--?[A-Za-z]/.test(next)) {
+			if (!isBoolean.has(body) && next !== undefined && !/^--?[A-Za-z]/.test(next)) {
 				record(body, next);
 				i++;
 			} else {
@@ -91,8 +121,30 @@ export function flagString(args: ParsedArgs, ...names: string[]): string | undef
 	return undefined;
 }
 
+/**
+ * Whether a boolean flag is set.
+ *
+ * `--yes=false` reads as an explicit refusal, so it must not enable the flag —
+ * it used to, which meant `run --yes=false` auto-approved every gate and spent
+ * the whole pipeline unattended.
+ */
 export function flagBoolean(args: ParsedArgs, ...names: string[]): boolean {
-	return names.some((name) => args.flags.get(name) !== undefined);
+	return names.some((name) => {
+		const value = args.flags.get(name);
+		if (value === undefined) return false;
+		return value === true || !FALSEY.has(value.trim().toLowerCase());
+	});
+}
+
+/**
+ * A value-taking flag that was given without one.
+ *
+ * `--workspace` with nothing after it parses as boolean `true`, and `flagString`
+ * then reports it as absent — so the command silently fell back to the default
+ * workspace, model, or output directory instead of saying the flag was empty.
+ */
+export function flagsMissingValues(args: ParsedArgs, ...names: string[]): string[] {
+	return names.filter((name) => args.flags.get(name) === true);
 }
 
 /** All values given for a repeatable flag, in order. */

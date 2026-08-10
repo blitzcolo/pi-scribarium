@@ -5,7 +5,13 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { parseAgentFile } from "../../src/agents/parse.js";
 import { AgentRegistry } from "../../src/agents/registry.js";
-import { createFileGate, gateRequestFile, writeDecision } from "../../src/gates/file.js";
+import {
+	createFileGate,
+	gateDecisionFile,
+	gateRequestFile,
+	writeDecision,
+} from "../../src/gates/file.js";
+import { selectGate } from "../../src/gates/select.js";
 import { initialRunState, runPipeline } from "../../src/pipeline/engine.js";
 import { parsePipeline } from "../../src/pipeline/load.js";
 import { hashPipeline, newRunId, RunLayout } from "../../src/workspace/layout.js";
@@ -236,6 +242,37 @@ describe("gates", () => {
 		expect(second.final.status).toBe("awaiting_gate");
 		// Consumed, so the step is not left permanently uncacheable.
 		expect(second.final.steps["write"]?.pendingFeedback).toBeUndefined();
+	});
+
+	// `readDecision` was only ever consulted by the file gate, but the workflow the
+	// CLI itself prints — reject with -m, then resume — is normally typed at a
+	// terminal, where selectGate picks the interactive gate. The recorded feedback
+	// was discarded, the reviewer re-prompted as though they had said nothing, and
+	// the stale decision left on disk for a later run to consume.
+	it("honours a recorded decision even when a terminal gate is selected", async () => {
+		const { final: halted } = await execute(scribe());
+		expect(halted.status).toBe("awaiting_gate");
+
+		writeDecision(layout, "approve-outline", { kind: "approve" });
+
+		// The interactive gate would block on stdin here if the decision were
+		// ignored, so reaching a terminal state at all is the assertion.
+		const spec = parsePipeline(PIPELINE, path.join(workspace, "pipeline.yaml"), registry);
+		const scripted = await createScriptedRuntime(agentDir, scribe());
+		const final = await runPipeline({
+			spec,
+			layout,
+			state: halted,
+			registry,
+			modelRuntime: scripted.runtime,
+			agentDir,
+			gate: selectGate(layout, { autoApprove: false, mode: "interactive" }),
+		});
+
+		expect(final.steps["approve-outline"]?.status).toBe("completed");
+		expect(final.status).toBe("completed");
+		// Consumed, so a later gate does not silently reuse it.
+		expect(fs.existsSync(gateDecisionFile(layout, "approve-outline"))).toBe(false);
 	});
 
 	it("consumes a decision so the regenerated work is reviewed again", async () => {

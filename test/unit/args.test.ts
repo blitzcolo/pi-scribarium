@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { flagAll, flagBoolean, flagString, parseArgs } from "../../src/cli/args.js";
+import { flagAll, flagBoolean, flagString, flagsMissingValues, parseArgs } from "../../src/cli/args.js";
 
 describe("parseArgs", () => {
 	it("separates the command from its positionals", () => {
@@ -37,12 +37,55 @@ describe("parseArgs", () => {
 		expect(flagBoolean(parseArgs(["-v"]), "version", "v")).toBe(true);
 	});
 
-	// The documented trade-off of uniform short/long handling: a boolean short
-	// flag placed before a positional would consume it, so positionals come first.
-	it("consumes the next token after a short flag, so positionals precede flags", () => {
+	// A *value* flag still consumes the next token, short or long alike, so that
+	// `-w /tmp` does not parse as a boolean plus a stray positional. Known boolean
+	// flags are exempt (see below), which is what makes `-q writer` safe.
+	it("consumes the next token after a short value flag", () => {
 		const args = parseArgs(["run-agent", "writer", "-q"]);
 		expect(args.positionals).toEqual(["writer"]);
 		expect(flagBoolean(args, "quiet", "q")).toBe(true);
+
+		const withValue = parseArgs(["run-agent", "-m", "some/model", "writer"]);
+		expect(flagString(withValue, "model", "m")).toBe("some/model");
+		expect(withValue.positionals).toEqual(["writer"]);
+	});
+
+	// A boolean flag that eats the next token is not an error, so it acts on the
+	// wrong thing in silence: `run --quiet paper.yaml` ran the default pipeline,
+	// and `approve -y run-123` approved whichever run happened to be latest.
+	it("does not let a boolean flag swallow the following positional", () => {
+		const run = parseArgs(["run", "--quiet", "paper.yaml"]);
+		expect(run.positionals).toEqual(["paper.yaml"]);
+		expect(flagBoolean(run, "quiet")).toBe(true);
+
+		const approve = parseArgs(["approve", "-y", "run-123"]);
+		expect(approve.positionals).toEqual(["run-123"]);
+		expect(flagBoolean(approve, "yes", "y")).toBe(true);
+
+		const init = parseArgs(["init", "--force", "./mypaper"]);
+		expect(init.positionals).toEqual(["./mypaper"]);
+	});
+
+	it("still lets a value flag take the following token", () => {
+		const args = parseArgs(["run", "--workspace", "/tmp/w", "paper.yaml"]);
+		expect(flagString(args, "workspace")).toBe("/tmp/w");
+		expect(args.positionals).toEqual(["paper.yaml"]);
+	});
+
+	// `--yes=false` reads as an explicit refusal. Treating it as set meant
+	// `run --yes=false` auto-approved every gate and spent the run unattended.
+	it("reads an explicit false as false", () => {
+		for (const value of ["false", "0", "no", "off", "FALSE"]) {
+			expect(flagBoolean(parseArgs(["run", `--yes=${value}`]), "yes")).toBe(false);
+		}
+		expect(flagBoolean(parseArgs(["run", "--yes=true"]), "yes")).toBe(true);
+		expect(flagBoolean(parseArgs(["run", "--yes"]), "yes")).toBe(true);
+	});
+
+	it("reports a value flag that was given no value", () => {
+		const args = parseArgs(["run", "--workspace"]);
+		expect(flagsMissingValues(args, "workspace", "model")).toEqual(["workspace"]);
+		expect(flagsMissingValues(parseArgs(["run", "--workspace", "/tmp/w"]), "workspace")).toEqual([]);
 	});
 
 	it("passes everything after -- through as positionals", () => {

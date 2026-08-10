@@ -10,7 +10,14 @@ import { collectCorpusInputs, formatPageRanges, ingestCorpus } from "../ingest/p
 import { PreflightError, ScribariumError, UsageError } from "../util/errors.js";
 import { assertDepthAllowed } from "../util/safety.js";
 import { VERSION } from "../version.js";
-import { flagAll, flagBoolean, flagString, parseArgs, type ParsedArgs } from "./args.js";
+import {
+	flagAll,
+	flagBoolean,
+	flagsMissingValues,
+	flagString,
+	parseArgs,
+	type ParsedArgs,
+} from "./args.js";
 // Type-only: erased at compile time, so it costs nothing at runtime.
 import type { RunStageResult } from "../runtime/run-stage.js";
 
@@ -104,8 +111,34 @@ function ignoreBrokenPipe(): void {
 	}
 }
 
+/** Every flag that takes a value, so one given without one is an error. */
+const VALUE_FLAGS = [
+	"agent-dir",
+	"gate-mode",
+	"input",
+	"m",
+	"message",
+	"model",
+	"out",
+	"session-dir",
+	"target",
+	"task",
+	"var",
+	"w",
+	"workspace",
+];
+
 async function main(argv: readonly string[]): Promise<number> {
 	const args = parseArgs(argv);
+
+	// A value flag with nothing after it parses as boolean true, and flagString
+	// then reports it as absent — so `run --workspace` silently ran against the
+	// current directory rather than saying the flag was empty.
+	const empty = flagsMissingValues(args, ...VALUE_FLAGS);
+	if (empty.length > 0) {
+		throw new UsageError(`${empty.map((name) => `--${name}`).join(", ")} needs a value.`);
+	}
+
 	// Cheap commands are exempt; only the ones that would spend money recurse.
 	if (["run", "resume", "run-agent"].includes(args.command ?? "")) assertDepthAllowed();
 	const command = args.command ?? (flagBoolean(args, "version", "v") ? "version" : "help");
@@ -126,7 +159,7 @@ async function main(argv: readonly string[]): Promise<number> {
 			const { workspace, agentDir } = await resolveContext(args);
 			const pipeline = args.positionals[0];
 			const modelOverride = flagString(args, "model", "m");
-			const gateMode = flagString(args, "gate-mode");
+			const gateMode = requireGateMode(flagString(args, "gate-mode"));
 			const { commandRun } = await import("./commands/run.js");
 			return await commandRun({
 				workspace,
@@ -143,7 +176,7 @@ async function main(argv: readonly string[]): Promise<number> {
 			const { workspace, agentDir } = await resolveContext(args);
 			const runId = args.positionals[0];
 			const modelOverride = flagString(args, "model", "m");
-			const gateMode = flagString(args, "gate-mode");
+			const gateMode = requireGateMode(flagString(args, "gate-mode"));
 			const { commandResume } = await import("./commands/resume.js");
 			return await commandResume({
 				workspace,
@@ -217,6 +250,16 @@ function parseVarFlags(args: ParsedArgs): Record<string, string> {
 }
 
 /** Pure path resolution — no SDK, so the cheap commands stay cheap. */
+/**
+ * An unknown `--gate-mode` used to fall through to TTY autodetection, so
+ * `--gate-mode=fiel` blocked on an interactive prompt in a run its author
+ * intended to be unattended.
+ */
+function requireGateMode(mode: string | undefined): string | undefined {
+	if (mode === undefined || mode === "file" || mode === "interactive") return mode;
+	throw new UsageError(`Unknown --gate-mode "${mode}". Use "file" or "interactive".`);
+}
+
 function resolveWorkspace(args: ParsedArgs): string {
 	return path.resolve(flagString(args, "workspace", "w") ?? process.cwd());
 }
@@ -345,7 +388,7 @@ async function commandIngest(args: ParsedArgs): Promise<number> {
 					inputs: collectCorpusInputs(
 						args.positionals.map((t) => path.resolve(workspace, t)),
 					),
-					outDir: path.resolve(flagString(args, "out") ?? path.join(workspace, "corpus", "text")),
+					outDir: path.resolve(workspace, flagString(args, "out") ?? path.join(workspace, "corpus", "text")),
 					label: args.positionals.join(", "),
 					required: true,
 				},

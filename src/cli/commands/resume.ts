@@ -72,6 +72,16 @@ export async function commandResume(options: ResumeOptions): Promise<number> {
 	// Vars are taken from the run, so resume cannot silently change them.
 	const spec = parsePipeline(source, state.pipelinePath, registry, state.vars);
 
+	// Re-freeze what was adopted, once it is known to parse. Without this every
+	// later `resume` reprinted the drift error, and a plain `resume` afterwards
+	// replayed the *old* frozen spec against state the new one had produced —
+	// exactly the two-specs mixture the check above exists to prevent.
+	if (options.forcePipeline && source !== frozen) {
+		fs.writeFileSync(layout.pipelineCopy, source, "utf-8");
+		state.pipelineHash = hashPipeline(source);
+		store.save(state);
+	}
+
 	const defaults = readRunDefaults(workspace, agentDir);
 	const fallbackModel = options.modelOverride ?? defaults.modelRef;
 	const modelRuntime = await ModelRuntime.create();
