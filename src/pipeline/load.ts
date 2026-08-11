@@ -4,6 +4,7 @@ import { LineCounter, parseDocument, type Document } from "yaml";
 
 import type { AgentRegistry } from "../agents/registry.js";
 import { ScribariumError } from "../util/errors.js";
+import { slug } from "../util/slug.js";
 import { DEFAULT_CONCURRENCY, MAX_CONCURRENCY } from "./pool.js";
 import {
 	BUILTIN_NAMES,
@@ -94,7 +95,7 @@ export function parsePipeline(
 
 	const name = typeof root["name"] === "string" ? root["name"] : "pipeline";
 	const description = typeof root["description"] === "string" ? root["description"] : undefined;
-	const vars = { ...readVars(root["vars"], ctx), ...overrides };
+	const vars = withSlugs({ ...readVars(root["vars"], ctx), ...overrides });
 	const defaults = readDefaults(root["defaults"], ctx);
 
 	const rawSteps = root["steps"];
@@ -453,6 +454,32 @@ function readVars(raw: unknown, ctx: Context): Record<string, string> {
 		vars[key] = String(value);
 	}
 	return vars;
+}
+
+/**
+ * Give every var a filesystem-safe twin, `<name>_slug`.
+ *
+ * A var that names a directory cannot be used raw: `--var name="红外融合"` would
+ * put non-ASCII into a path, and a var holding a sentence would put spaces
+ * there. Slugging at the call site instead would mean doing it in the template
+ * language, which has no functions by design.
+ *
+ * Derived before validation, so `${vars.name_slug}` resolves like any other var
+ * and a foreach glob can be built from it. An explicit `name_slug` in the
+ * pipeline or on the command line wins — the derivation only fills gaps.
+ *
+ * Note that slugging is lossy for scripts NFKD cannot fold onto ASCII: a purely
+ * Chinese value slugs to the fallback, which is why the explore pipeline asks
+ * for a separate short handle rather than slugging the research direction.
+ */
+function withSlugs(vars: Record<string, string>): Record<string, string> {
+	const out = { ...vars };
+	for (const [key, value] of Object.entries(vars)) {
+		if (key.endsWith("_slug")) continue;
+		const derived = `${key}_slug`;
+		if (out[derived] === undefined) out[derived] = slug(value);
+	}
+	return out;
 }
 
 function readDefaults(raw: unknown, ctx: Context): PipelineSpec["defaults"] {

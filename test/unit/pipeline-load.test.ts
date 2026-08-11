@@ -264,6 +264,46 @@ steps:
 	});
 });
 
+describe("derived slug vars", () => {
+	const source = `
+vars:
+  name: "exploration"
+steps:
+  - id: analyze
+    foreach: "explore/\${vars.name_slug}/refs/text/*.md"
+    agent: outliner
+    output: explore/\${vars.name_slug}/cards/\${item.id}.md
+`;
+
+	// A var naming a directory cannot be used raw, and the template language has
+	// no functions by design — so the slug is derived at load time instead.
+	it("gives every var a filesystem-safe twin", () => {
+		const spec = parsePipeline(source, FILE, registry("outliner"), { name: "Multimodal Fusion!" });
+		expect(spec.vars["name_slug"]).toBe("multimodal-fusion");
+	});
+
+	// The whole reason the explore pipeline asks for a separate ASCII handle: a
+	// Chinese direction slugs to nothing, and a directory cannot be named that.
+	it("falls back rather than producing an empty path segment", () => {
+		const spec = parsePipeline(source, FILE, registry("outliner"), { name: "红外融合" });
+		expect(spec.vars["name_slug"]).toBe("item");
+	});
+
+	it("lets an explicit slug win over the derived one", () => {
+		const spec = parsePipeline(source, FILE, registry("outliner"), {
+			name: "A Long Descriptive Title",
+			name_slug: "short",
+		});
+		expect(spec.vars["name_slug"]).toBe("short");
+	});
+
+	// Derived before validation, so a foreach glob and an output path can be
+	// built from one — which is the only reason the derivation is worth having.
+	it("resolves in templates that are checked at load time", () => {
+		expect(() => parsePipeline(source, FILE, registry("outliner"))).not.toThrow();
+	});
+});
+
 describe("foreach steps", () => {
 	const base = (extra: string) => `
 steps:
