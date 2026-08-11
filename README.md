@@ -30,13 +30,24 @@ unreadable PDF cannot discard the analyses you already paid for.
 
 ## What it will not do
 
-**It does not search the web or download anything.** You supply every document.
+**When writing a paper, it does not search the web or download anything.** You
+supply every document the `paper` pipeline sees.
 
 That is deliberate rather than unfinished. The tool's one real guarantee is that
 a citation it writes can be traced to a file in your workspace — a guarantee that
 evaporates the moment it can fetch its own sources. Fabricated references are the
 failure that costs an author their credibility rather than their time, so the
 architecture is built around making them detectable.
+
+The `explore` pipeline (below) is the one exception, and it is scoped rather than
+general. It queries arXiv, Semantic Scholar and OpenAlex, and downloads
+open-access PDFs, because deciding whether an idea is new is a question about the
+published literature and cannot be answered from your own directory. Even there,
+**no agent downloads anything**: searching and fetching are deterministic
+non-model steps, and exactly one agent — the query planner — gets a read-only
+search tool so it can check a search term before a hundred papers are fetched on
+the strength of it. Everything it retrieves lands in your workspace as a file,
+so the citation guarantee still holds over the result.
 
 ## Install
 
@@ -323,6 +334,60 @@ Discovery, lowest precedence first: shipped → `~/.pi/agent/agents/` →
 `.pi/agents/` → `<workspace>/.scribarium/agents/`. Drop a file with the same
 `name` into your workspace to override a shipped agent.
 
+## Finding a contribution: the `explore` pipeline
+
+The other shipped pipeline answers a different question. Not *how do I write this
+paper*, but *is this idea already taken*.
+
+```bash
+scribarium run explore --workspace ~/my-project \
+  --var direction="what you want to work on, in any language" \
+  --var name=thermal-fusion \
+  --var bulk=deepseek/deepseek-v4-flash --var judgement=kimi-coding/k3-256k
+```
+
+It reads your own work in `source/`, proposes candidate contributions, searches
+the literature for each, analyses what it finds one paper per session, chases the
+references those papers cite, and finishes with a verdict per candidate:
+
+| Verdict | Meaning |
+|---|---|
+| `taken` | done, under close enough conditions that redoing it adds nothing |
+| `crowded-but-flawed` | many groups, one shared limitation you could avoid |
+| `partially-done` | exists under different conditions; the named gaps are the contribution |
+| `no-precedent` | nothing found — always the weakest verdict, because a bad query looks identical |
+
+Everything lands in `explore/<name>/`, with `report.md` as the front page:
+candidates ranked on novelty against feasibility, and `verdicts/<id>.md` for each
+one's prior work, next steps, and boundary conditions.
+
+**Two gates, both before money is spent.** The first shows you the candidate list
+before any searching — prune it by deleting entries from `candidates.json`, then
+approve. The second shows the follow-up references before the second search round;
+approving with an emptied `followups.json` stops at round one. Under `--gate-mode
+file` (the default when not on a terminal) the run exits `10` and waits for
+`scribarium approve <runId>`.
+
+**Searching is English-only.** arXiv, Semantic Scholar and OpenAlex index
+English-language literature, so the agents translate your direction into the
+field's own terminology. A non-English query is refused outright rather than
+returning an empty result, which would read exactly like an unstudied topic.
+
+**Budget.** Round one fetches up to 100 papers, and both rounds together up to
+150 — enforced in code, not by a model. Expect a few minutes of network before
+the model work starts: the backends are rate-limited and downloads are
+sequential. Reruns are cheap, though: nothing already on disk is fetched again,
+and analysed papers are cached on their file times, so a killed run resumes owing
+only what it had not finished.
+
+Optional environment variables: `SEMANTIC_SCHOLAR_API_KEY` raises that backend's
+rate limit, and `SCRIBARIUM_MAILTO` puts you in OpenAlex's polite pool.
+
+**Read the verdicts, not just the table.** Every verdict discloses what it rests
+on — how many papers were read in full, how many only as abstracts, how many
+could not be fetched. A `no-precedent` built on four abstracts is a weak claim,
+and the report says so rather than letting it read as an open field.
+
 ## Pipeline reference
 
 ```yaml
@@ -360,6 +425,17 @@ Templates resolve `${vars.*}`, `${item.*}`, `${steps.<id>.outputs}`, `${output}`
 `${workspace}`, and `${runId}`. Everything is validated before the first model
 call: an unknown agent, an unresolvable reference, or a fan-out output that every
 item would share is a load-time error, not a discovery made twelve papers in.
+
+Every var also gets a filesystem-safe twin, `${vars.<name>_slug}`, for vars that
+name a directory. Note that it is lossy for scripts that do not fold onto ASCII —
+a purely Chinese value slugs away to `item` — so name a directory with a short
+ASCII var of its own rather than with prose.
+
+Builtins: `ingest`, `assemble`, `build-index`, `check-citations`, and, for the
+explore pipeline, `search-papers`, `fetch-papers`, `collate-followups`, and
+`collate-evidence`. The last four are the only code in the project that touches
+the network; keeping them deterministic is what makes the paper caps enforceable
+and the whole thing testable without a live API.
 
 Exit codes: `0` ok · `1` failed · `2` usage/config · `3` preflight · `10`
 awaiting a gate · `130` interrupted.

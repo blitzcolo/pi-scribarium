@@ -14,6 +14,7 @@ npm test                 # unit + integration (scripted provider, no network, no
 # The bin is `scribarium` (dist/cli/main.js); run it directly during development:
 node dist/cli/main.js validate               # preflight: resolve every agent's model + auth
 node dist/cli/main.js run pipelines/paper.yaml --workspace examples/demo-paper
+node dist/cli/main.js run explore --workspace <ws> --var name=<slug> --var direction="..."
 node dist/cli/main.js resume <runId>
 node dist/cli/main.js status <runId>
 node dist/cli/main.js report <runId>
@@ -296,6 +297,12 @@ load-bearing, not organisational:
   this landed.
 - **An optional directory isolates per-file failures**, matching how a fan-out treats one bad item;
   losing every file is still fatal. `corpus/` fails on the first bad document.
+- **`explore/<name>/` is a fourth kind and belongs to no author.** It holds one exploration's
+  fetched corpus and its derived files, is scaffolded by no command, and is safe to delete whole.
+  Keeping it out of `references/` is deliberate: those three directories carry a promise about
+  *whose work* a document is, and a hundred and fifty papers a search engine chose fit none of them.
+  It is named by `--var name=`, not by the research direction — a direction in a script NFKD cannot
+  fold onto ASCII slugs away to nothing (see the derived `_slug` vars in `load.ts`).
 
 ### The reference library
 
@@ -349,11 +356,64 @@ for.
 - `optional: true` turns "matched no items" into a skipped step. A skipped step
   does not fail the run; it is a deliberate outcome, not an error.
 
+## The network layer
+
+The `explore` pipeline reverses this project's original "no network" guarantee, deliberately and
+narrowly. Deciding whether an idea is new is a question about the published literature and cannot
+be answered from the author's own directory. The `paper` pipeline stays fully offline, and
+`shipped-workspace.test.ts` asserts that — it will fail if a search step or a networked tool ever
+appears in it.
+
+- **All HTTP lives in `src/search/`**, which imports no SDK symbol (`cli-startup.test.ts` walks the
+  import graph and would catch it). Three backends: arXiv (Atom), Semantic Scholar, OpenAlex.
+  Google Scholar is absent because it has no API and scraping it violates its terms.
+- **Only two builtins and one tool touch the network.** `search-papers` and `fetch-papers` are
+  deterministic and model-free; `search_papers` is a read-only probe granted to the query planner
+  alone. **No agent ever downloads.** The tool allowlist is the only containment there is.
+- **Caps are enforced in code, never by a model.** 100 papers in round one, 150 across both. A
+  budget a model can talk itself past is not a budget.
+- **Every network artifact is persisted before the next step.** Results files, PDFs, abstract-only
+  stubs, metadata sidecars and the manifest all land on disk, and `fetch-papers` skips any file it
+  already has — so resume never re-pays for a download, and a run killed among a hundred papers
+  costs only the one in flight.
+- **A dead backend is a value, not an exception.** It becomes a warning on an `ok` result and the
+  other two continue; one index being down should narrow a search, not end a paid run. The warning
+  matters because a short result list otherwise reads as a short literature.
+- **Non-English queries are refused at the tool boundary**, not merely discouraged in a prompt.
+  These indexes hold English literature, so a Chinese query returns nothing — and an empty result
+  is indistinguishable from a topic nobody has studied, which is the one wrong answer this pipeline
+  exists to prevent.
+- **Paywalled papers become abstract-only stubs** carrying an `ABSTRACT ONLY` banner and an
+  `abstract_only: true` flag, so ingest and the fan-out see one uniform corpus while the weaker
+  evidence stays labelled all the way into the verdict's disclosed counts.
+- **Downloads are validated as PDFs** by magic bytes and a size floor: publishers answer a PDF
+  request with an HTML consent page and HTTP 200, and saved blindly that reaches ingest as a paper.
+- **The HTTP seam is an injectable `Fetcher`** threaded `RunPipelineOptions` → `BuiltinContext` and
+  → `RunStageOptions.customToolContext`. `test/helpers/scripted-fetch.ts` serves fixtures and
+  records every URL, which is what makes "this step made no request" assertable.
+- **`typebox` is pinned to `1.3.7`**, matching the SDK's own pin, because `ToolDefinition.parameters`
+  is a TypeBox schema. It was reachable by hoisting alone; relying on that would have broken on any
+  dependency reshuffle.
+- **Granting a custom tool takes three agreeing pieces**: the name in `CUSTOM_TOOLS`
+  (`src/agents/types.ts`), in the agent's own `tools:` list, and a `ToolDefinition` built in
+  `src/runtime/custom-tools.ts`. The SDK filters `customTools` through the same strict allowlist, so
+  a tool built but omitted from the list is silently unavailable. `tools: all` stays built-ins only —
+  network capability must never arrive through a shorthand.
+- **The double-analyse idiom**: `analyze` and `analyze-round2` share one glob, one agent and one
+  output template, and rely on `cache: true` so round one is not re-paid for. Expressing round two
+  as a second step rather than a loop keeps every stage a plain forward edge, which is what resume
+  and the gates are built on.
+- **`cards` are the contract for the judge.** It never re-opens the papers: re-reading the corpus
+  would cost more than producing it did. Prompt discipline plus evidence packets that list only card
+  paths is the enforcement — tools are not path-scoped, so this cannot be sandboxed.
+
 ## Gates, resume, and regeneration
 
 A `gate` step stops the run for a human decision. Placement matters: the outline
 is the cheapest place to change direction, because every later stage is written
-against it.
+against it. In `explore` both gates sit immediately before a spending decision —
+the candidate list before any searching, the follow-up references before the
+second round — because everything downstream is priced per candidate.
 
 - **Gate mode** defaults to the terminal when stdin and stdout are both TTYs and
   to the file protocol otherwise, so the same command works interactively and in
@@ -397,3 +457,14 @@ is what makes hermeticity and allowlist assertions possible.
 
 Prefer adding to this harness over mocking our own modules: a test that stubs `runStage` proves
 nothing about the SDK behaviours listed above, and those are where the bugs have actually been.
+
+**`ScriptContext.turn` counts across the whole runtime, not per session.** One runtime serves every
+stage of a pipeline run, so a script driving several stages cannot use `turn === 1` to mean "first
+turn of this stage" — every stage after the first would be treated as a continuation and skip its
+work, and the run then fails several steps later on a missing output. Key off `lastUserText` instead.
+
+`test/helpers/scripted-fetch.ts` is the same idea for HTTP: it replaces only the wire, so the
+adapters parse real captured responses and the builtins write real files. It records every URL, so
+"this stage never reached the network" is assertable — and an unmatched URL throws rather than
+answering 404, because an empty result is a legitimate outcome here and a forgotten route would
+otherwise look like a passing test of the wrong thing.

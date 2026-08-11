@@ -7,9 +7,11 @@ import { UsageError } from "../../util/errors.js";
 /**
  * Scaffold a workspace.
  *
- * A workspace is one paper. Everything the pipeline needs is a file you put
- * there yourself: the tool has no network access, and the citation-integrity
- * story depends on every reference tracing back to a document you supplied.
+ * A workspace is one paper. Everything the writing pipeline needs is a file you
+ * put there yourself: it makes no network access at all, and the
+ * citation-integrity story depends on every reference tracing back to a document
+ * you supplied. (The separate `explore` pipeline does search and download, into
+ * its own directory — see the README. It is not scaffolded here.)
  *
  * Three input directories, because they are read for three different reasons.
  * `corpus/` alone defines the venue's norms; folding cited literature into it
@@ -78,8 +80,9 @@ work out what that venue publishes and how it expects work to be written.
   out.pdf\`) rather than analysed as if it were readable. A few blank pages —
   a full-page figure, say — are noted and extraction continues.
 
-Nothing here is downloaded for you. The tool has no network access, and that is
-deliberate: every citation it produces must trace back to a file you put here.
+Nothing here is downloaded for you. The writing pipeline makes no network
+requests at all, and that is deliberate: every citation it produces must trace
+back to a file you put here.
 `;
 
 const REFERENCES_README = `# references/
