@@ -2,6 +2,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 import { checkCitations, formatCitationReport, type CitationReport } from "../checks/citations.js";
+import { collateEvidence } from "../checks/evidence.js";
+import { collateFollowups } from "../checks/followups.js";
 import { buildReferenceIndex } from "../checks/reference-index.js";
 import {
 	collectCorpusInputs,
@@ -9,6 +11,10 @@ import {
 	ingestCorpus,
 	parseExtensionFilter,
 } from "../ingest/pdf.js";
+import { fetchPapers } from "../search/fetch-papers.js";
+import { createPoliteFetcher, type Fetcher } from "../search/http.js";
+import { executeSearch } from "../search/run-search.js";
+import type { PaperRecord, QueriesFile, QuerySpec, ResultsFile } from "../search/types.js";
 import type { BuiltinStepSpec } from "./schema.js";
 
 export interface BuiltinContext {
@@ -16,6 +22,14 @@ export interface BuiltinContext {
 	/** Absolute path the step's declared outputs resolve to. */
 	resolveOutput: (relativePath: string) => string;
 	onProgress?: (message: string) => void;
+	/**
+	 * HTTP transport for the searching builtins.
+	 *
+	 * Injected so tests serve fixtures instead of reaching the open internet, and
+	 * so the offline builtins can be proven never to have used it. Unset means
+	 * the real polite fetcher.
+	 */
+	fetcher?: Fetcher;
 }
 
 export interface BuiltinResult {
@@ -45,7 +59,263 @@ export async function runBuiltin(
 			return runCitationCheck(step, ctx);
 		case "build-index":
 			return runBuildIndex(step, ctx);
+		case "search-papers":
+			return await runSearchPapers(step, ctx);
+		case "fetch-papers":
+			return await runFetchPapers(step, ctx);
+		case "collate-followups":
+			return runCollateFollowups(step, ctx);
+		case "collate-evidence":
+			return runCollateEvidence(step, ctx);
 	}
+}
+
+/**
+ * Run the planned queries against the search backends.
+ *
+ * A builtin rather than an agent action: the caps are budget limits, and a
+ * budget a model can talk itself past is not a budget. The judgement in this
+ * stage — what to search for — already happened in the planner that wrote the
+ * query file.
+ */
+async function runSearchPapers(
+	step: BuiltinStepSpec,
+	ctx: BuiltinContext,
+): Promise<BuiltinResult> {
+	const queriesPath = stringOption(step, "queries", "queries.json");
+	const out = stringOption(step, "out", "results.json");
+	const round = numberOption(step, "round", 1);
+	const perQueryLimit = numberOption(step, "per_query_limit", 25);
+	const maxTotal = numberOption(step, "max_total", 100);
+	const excludePath = optionalString(step, "exclude");
+
+	let queries: QuerySpec[];
+	try {
+		queries = readQueries(path.resolve(ctx.workspace, queriesPath));
+	} catch (cause) {
+		return { ok: false, summary: "could not read the query list", error: String(cause) };
+	}
+
+	let exclude: PaperRecord[] = [];
+	if (excludePath !== undefined) {
+		exclude = readResults(path.resolve(ctx.workspace, excludePath)).papers;
+	}
+
+	const result = await executeSearch({
+		queries,
+		fetcher: ctx.fetcher ?? createPoliteFetcher(),
+		perQueryLimit,
+		maxTotal,
+		exclude,
+		...(ctx.onProgress !== undefined ? { onProgress: ctx.onProgress } : {}),
+	});
+
+	const file: ResultsFile = {
+		version: 1,
+		round,
+		executedAt: new Date().toISOString(),
+		queries,
+		papers: result.papers,
+		warnings: result.warnings,
+	};
+	writeJson(path.resolve(ctx.workspace, out), file);
+
+	// An empty round is a legitimate outcome, not a failure: a second round whose
+	// follow-ups were all pruned should leave the pipeline running.
+	const summary = `${result.papers.length} paper(s) from ${queries.length} quer${
+		queries.length === 1 ? "y" : "ies"
+	} -> ${out}`;
+
+	return result.warnings.length === 0
+		? { ok: true, summary }
+		: { ok: true, summary, error: result.warnings.join(" ") };
+}
+
+/**
+ * Download what is open access and stub what is not.
+ *
+ * Never done by an agent. Downloading is mechanical, and keeping it out of a
+ * session means no model can be talked into fetching something the pipeline did
+ * not plan for.
+ */
+async function runFetchPapers(step: BuiltinStepSpec, ctx: BuiltinContext): Promise<BuiltinResult> {
+	const resultsPath = stringOption(step, "results", "results.json");
+	const dir = stringOption(step, "dir", "refs");
+	const minPdfBytes = numberOption(step, "min_pdf_bytes", 10_000);
+
+	let results: ResultsFile;
+	try {
+		results = readResults(path.resolve(ctx.workspace, resultsPath));
+	} catch (cause) {
+		return { ok: false, summary: "could not read the search results", error: String(cause) };
+	}
+
+	const outcome = await fetchPapers({
+		papers: results.papers,
+		dir: path.resolve(ctx.workspace, dir),
+		fetcher: ctx.fetcher ?? createPoliteFetcher(),
+		minPdfBytes,
+		...(ctx.onProgress !== undefined ? { onProgress: ctx.onProgress } : {}),
+	});
+
+	const summary =
+		`${outcome.downloaded} downloaded, ${outcome.abstractOnly} abstract-only, ` +
+		`${outcome.failed} unavailable -> ${dir}/`;
+
+	// Papers that reached neither full text nor an abstract are surfaced as a
+	// warning: they are gaps in the evidence, and a run that hides them lets a
+	// verdict of "no precedent" rest on papers nobody read.
+	if (outcome.failed > 0) {
+		return {
+			ok: true,
+			summary,
+			error: `${outcome.failed} paper(s) had no open-access PDF and no abstract`,
+		};
+	}
+	return { ok: true, summary };
+}
+
+/** Collate the follow-up references the analysts named into a round-2 query list. */
+function runCollateFollowups(step: BuiltinStepSpec, ctx: BuiltinContext): BuiltinResult {
+	const cards = stringOption(step, "cards", "cards");
+	const knownPath = stringOption(step, "known", "results-round1.json");
+	const out = stringOption(step, "out", "followups.json");
+	const summaryPath = stringOption(step, "summary", "followups.md");
+	const maxTotal = numberOption(step, "max_total", 150);
+
+	const known = readResults(path.resolve(ctx.workspace, knownPath)).papers;
+	const report = collateFollowups({ workspace: ctx.workspace, cards, known, maxTotal });
+
+	const queries: QueriesFile = { version: 1, queries: report.queries };
+	writeJson(path.resolve(ctx.workspace, out), queries);
+	writeText(path.resolve(ctx.workspace, summaryPath), report.markdown);
+
+	const notes: string[] = [];
+	if (report.dropped.length > 0) notes.push(`${report.dropped.length} over the cap`);
+	if (report.unreadable.length > 0) notes.push(`${report.unreadable.length} unreadable card(s)`);
+
+	return {
+		ok: true,
+		summary:
+			`${report.kept.length} follow-up reference(s) proposed for round 2 -> ${out}` +
+			(notes.length > 0 ? ` (${notes.join(", ")})` : ""),
+	};
+}
+
+/** Group the cards into one evidence packet per candidate innovation point. */
+function runCollateEvidence(step: BuiltinStepSpec, ctx: BuiltinContext): BuiltinResult {
+	const outDir = stringOption(step, "out_dir", "evidence");
+
+	let report: ReturnType<typeof collateEvidence>;
+	try {
+		report = collateEvidence({
+			workspace: ctx.workspace,
+			cards: stringOption(step, "cards", "cards"),
+			candidates: stringOption(step, "candidates", "candidates.json"),
+			...optional("manifest", optionalString(step, "manifest")),
+			...optional("followups", optionalString(step, "followups")),
+			...optional("results", optionalString(step, "results")),
+		});
+	} catch (cause) {
+		return { ok: false, summary: "could not build the evidence packets", error: String(cause) };
+	}
+
+	const target = path.resolve(ctx.workspace, outDir);
+	fs.mkdirSync(target, { recursive: true });
+	for (const packet of report.packets) {
+		fs.writeFileSync(path.join(target, `${packet.point}.md`), packet.markdown, "utf-8");
+	}
+
+	const empty = report.packets.filter((packet) => packet.cards.length === 0).length;
+	const notes: string[] = [];
+	if (empty > 0) notes.push(`${empty} with no evidence`);
+	if (report.orphaned.length > 0) notes.push(`${report.orphaned.length} card link(s) unmatched`);
+	if (report.unreadable.length > 0) notes.push(`${report.unreadable.length} unreadable card(s)`);
+
+	return {
+		ok: true,
+		summary:
+			`${report.packets.length} evidence packet(s) -> ${outDir}/` +
+			(notes.length > 0 ? ` (${notes.join(", ")})` : ""),
+		...(report.orphaned.length > 0
+			? { error: `cards name unknown innovation points: ${report.orphaned.join(", ")}` }
+			: {}),
+	};
+}
+
+function readQueries(file: string): QuerySpec[] {
+	const parsed = JSON.parse(fs.readFileSync(file, "utf-8")) as { queries?: unknown };
+	if (!Array.isArray(parsed.queries)) throw new Error(`${file} must hold a "queries" array`);
+
+	const out: QuerySpec[] = [];
+	for (const entry of parsed.queries) {
+		if (typeof entry !== "object" || entry === null) continue;
+		const record = entry as Record<string, unknown>;
+		const point = typeof record["point"] === "string" ? record["point"] : "";
+		if (point === "") continue;
+
+		const spec: QuerySpec = { kind: record["kind"] === "id" ? "id" : "query", point };
+		for (const key of ["query", "doi", "arxivId", "title"] as const) {
+			const value = record[key];
+			if (typeof value === "string" && value.trim() !== "") spec[key] = value.trim();
+		}
+		const limit = record["limit"];
+		if (typeof limit === "number" && Number.isFinite(limit)) spec.limit = limit;
+		out.push(spec);
+	}
+	return out;
+}
+
+/** A missing results file is an empty one: round two may run before round one wrote anything. */
+function readResults(file: string): ResultsFile {
+	try {
+		const parsed = JSON.parse(fs.readFileSync(file, "utf-8")) as Partial<ResultsFile>;
+		if (Array.isArray(parsed.papers)) return parsed as ResultsFile;
+	} catch {
+		// Fall through to the empty result below.
+	}
+	return { version: 1, round: 0, executedAt: "", queries: [], papers: [], warnings: [] };
+}
+
+function writeJson(target: string, value: unknown): void {
+	fs.mkdirSync(path.dirname(target), { recursive: true });
+	fs.writeFileSync(target, `${JSON.stringify(value, null, "\t")}\n`, "utf-8");
+}
+
+function writeText(target: string, value: string): void {
+	fs.mkdirSync(path.dirname(target), { recursive: true });
+	fs.writeFileSync(target, value, "utf-8");
+}
+
+function stringOption(step: BuiltinStepSpec, key: string, fallback: string): string {
+	const value = step.with[key];
+	return typeof value === "string" && value.trim() !== "" ? value.trim() : fallback;
+}
+
+function optionalString(step: BuiltinStepSpec, key: string): string | undefined {
+	const value = step.with[key];
+	return typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
+}
+
+/**
+ * Numeric options arrive as strings.
+ *
+ * The engine interpolates string values in `with:` but leaves everything else
+ * alone, so pipelines write `max_total: "150"` and the parsing happens here.
+ */
+function numberOption(step: BuiltinStepSpec, key: string, fallback: number): number {
+	const value = step.with[key];
+	if (typeof value === "number" && Number.isFinite(value)) return value;
+	if (typeof value === "string") {
+		const parsed = Number.parseInt(value.trim(), 10);
+		if (Number.isFinite(parsed)) return parsed;
+	}
+	return fallback;
+}
+
+/** `exactOptionalPropertyTypes` rejects an explicit undefined, so omit the key. */
+function optional<K extends string>(key: K, value: string | undefined): Record<K, string> | Record<string, never> {
+	return value === undefined ? {} : ({ [key]: value } as Record<K, string>);
 }
 
 /**
@@ -154,12 +424,19 @@ function assembleSections(step: BuiltinStepSpec, ctx: BuiltinContext): BuiltinRe
 		typeof step.with["out"] === "string" ? step.with["out"] : "draft/paper.md",
 	);
 
+	// Which array in the file holds the parts. Defaults to `sections`, so every
+	// existing pipeline keeps working; the explore pipeline points it at
+	// `candidates` to merge one verdict per innovation point with the same
+	// missing-part honesty.
+	const listKey = stringOption(step, "path", "sections");
+
 	let sections: Array<{ id?: unknown; title?: unknown }>;
 	try {
-		const parsed = JSON.parse(fs.readFileSync(sectionsFile, "utf-8")) as {
-			sections?: Array<{ id?: unknown; title?: unknown }>;
-		};
-		sections = parsed.sections ?? [];
+		const parsed = JSON.parse(fs.readFileSync(sectionsFile, "utf-8")) as Record<
+			string,
+			Array<{ id?: unknown; title?: unknown }> | undefined
+		>;
+		sections = parsed[listKey] ?? [];
 	} catch (cause) {
 		return {
 			ok: false,

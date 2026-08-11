@@ -5,7 +5,7 @@
  *
  *   - `agent`   — run one agent definition to completion
  *   - `foreach` — fan the same agent out over many items, one session each
- *   - `builtin` — deterministic code: ingest, assemble, build-index, citations
+ *   - `builtin` — deterministic code: ingest, assemble, indexes, citations, search
  *   - `gate`    — stop for a human decision
  *
  * Only a gate can move the cursor backwards: rejecting one rewinds to its
@@ -39,7 +39,15 @@ export interface AgentStepSpec {
 	timeoutMs?: number;
 }
 
-export type BuiltinName = "ingest" | "assemble" | "check-citations" | "build-index";
+export type BuiltinName =
+	| "ingest"
+	| "assemble"
+	| "check-citations"
+	| "build-index"
+	| "search-papers"
+	| "fetch-papers"
+	| "collate-followups"
+	| "collate-evidence";
 
 export interface BuiltinStepSpec {
 	kind: "builtin";
@@ -120,4 +128,8 @@ export const BUILTIN_NAMES: readonly BuiltinName[] = [
 	"assemble",
 	"check-citations",
 	"build-index",
+	"search-papers",
+	"fetch-papers",
+	"collate-followups",
+	"collate-evidence",
 ];

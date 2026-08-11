@@ -6,6 +6,7 @@ import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { AgentRegistry } from "../agents/registry.js";
 import { AGENT_DEFAULTS, type ThinkingLevelName } from "../agents/types.js";
 import { runStage, type RunStageResult, type StageEvent } from "../runtime/run-stage.js";
+import type { Fetcher } from "../search/http.js";
 import { contain, type RunLayout } from "../workspace/layout.js";
 import {
 	addUsage,
@@ -44,6 +45,14 @@ export interface RunPipelineOptions {
 	defaultThinking?: ThinkingLevelName;
 	/** Decides what happens at a gate. Defaults to auto-approve. */
 	gate?: GateHandler;
+	/**
+	 * HTTP transport for the searching builtins and the `search_papers` tool.
+	 *
+	 * Injected rather than reached for directly so tests can serve fixtures, and
+	 * so a step that is meant to stay offline can be proven to have made no
+	 * request. Unset means the real polite fetcher.
+	 */
+	fetcher?: Fetcher;
 	signal?: AbortSignal;
 	onEvent?: (event: PipelineEvent) => void;
 }
@@ -381,6 +390,7 @@ async function executeBuiltin(
 		workspace: options.layout.workspace,
 		resolveOutput: (relative) => options.layout.artifact(relative),
 		onProgress: (message) => options.onEvent?.({ type: "log", message }),
+		...(options.fetcher !== undefined ? { fetcher: options.fetcher } : {}),
 	});
 
 	if (!result.ok) {

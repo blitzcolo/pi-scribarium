@@ -84,4 +84,49 @@ describe("assemble", () => {
 		expect(empty.ok).toBe(false);
 		expect(empty.error).toMatch(/no sections/);
 	});
+
+	// The explore pipeline merges one verdict per innovation point out of
+	// `candidates.json`, which names its array `candidates` rather than
+	// `sections`. Everything else about the merge — ordering, missing-part
+	// markers — should be identical.
+	it("reads the parts list from another key when `path` names one", async () => {
+		fs.mkdirSync(path.join(workspace, "verdicts"), { recursive: true });
+		fs.writeFileSync(
+			path.join(workspace, "candidates.json"),
+			JSON.stringify({
+				candidates: [
+					{ id: "ip-1", title: "First idea" },
+					{ id: "ip-2", title: "Second idea" },
+				],
+			}),
+		);
+		fs.writeFileSync(path.join(workspace, "verdicts", "ip-1.md"), "## First idea\n\nTaken.");
+
+		const result = await runBuiltin(
+			{
+				...step,
+				with: {
+					sections: "candidates.json",
+					path: "candidates",
+					from: "verdicts",
+					out: "verdicts-merged.md",
+				},
+			},
+			ctx(),
+		);
+		const merged = fs.readFileSync(path.join(workspace, "verdicts-merged.md"), "utf-8");
+
+		expect(result.ok).toBe(true);
+		expect(merged).toContain("Taken.");
+		expect(merged).toContain("SECTION MISSING: ip-2");
+	});
+
+	// Every existing pipeline omits `path`, and those files name their array
+	// `sections`; defaulting anywhere else would break them silently.
+	it("still defaults to the sections key", async () => {
+		writeSections([{ id: "intro", title: "Introduction" }]);
+		fs.writeFileSync(path.join(workspace, "draft", "intro.md"), "## Introduction\n\nI.");
+
+		expect((await runBuiltin(step, ctx())).ok).toBe(true);
+	});
 });

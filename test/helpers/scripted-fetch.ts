@@ -54,7 +54,7 @@ export function scriptedFetcher(routes: readonly ScriptedRoute[]): ScriptedFetch
 					? route.body
 					: JSON.stringify(route.body);
 
-		return new Response(body as BodyInit, {
+		return new Response(body, {
 			status: route.status ?? 200,
 			headers: route.headers ?? {},
 		});
