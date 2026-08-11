@@ -31,6 +31,24 @@ export type ThinkingLevelName = (typeof THINKING_LEVELS)[number];
 export const BUILTIN_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"] as const;
 export type BuiltinToolName = (typeof BUILTIN_TOOLS)[number];
 
+/**
+ * Tools this project defines and hands to the SDK as `customTools`.
+ *
+ * Kept apart from the built-ins because granting one is a different decision:
+ * `search_papers` reaches the open internet, and the rest of this project is
+ * built on reading only what the author put in the workspace. An agent gets it
+ * by naming it explicitly, never by inheriting a default — which is also why
+ * `tools: all` expands to the built-ins alone.
+ */
+export const CUSTOM_TOOLS = ["search_papers"] as const;
+export type CustomToolName = (typeof CUSTOM_TOOLS)[number];
+
+export type ToolName = BuiltinToolName | CustomToolName;
+
+export function isCustomTool(name: string): name is CustomToolName {
+	return (CUSTOM_TOOLS as readonly string[]).includes(name);
+}
+
 /** Tools granted when an agent does not declare any. Deliberately read-only. */
 export const DEFAULT_TOOLS: readonly BuiltinToolName[] = ["read", "grep", "find", "ls"];
 

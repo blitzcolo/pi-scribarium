@@ -560,6 +560,9 @@ async function runOneStage(
 		agentDir: options.agentDir,
 		modelRuntime,
 		sessionDir: layout.sessionsDir,
+		// Only reaches an agent whose `tools:` grants a custom tool; every shipped
+		// agent but the query planner grants none and stays offline regardless.
+		...(options.fetcher !== undefined ? { customToolContext: { fetcher: options.fetcher } } : {}),
 		...(modelRef !== undefined ? { defaultModelRef: modelRef } : {}),
 		...(options.defaultThinking !== undefined ? { defaultThinking: options.defaultThinking } : {}),
 		...(stageSignal !== undefined ? { signal: stageSignal } : {}),

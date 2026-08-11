@@ -13,6 +13,7 @@
 import {
 	createAgentSession,
 	DefaultResourceLoader,
+	defineTool,
 	getAgentDir,
 	ModelRuntime,
 	parseFrontmatter,
@@ -21,7 +22,9 @@ import {
 	SettingsManager,
 	type AgentSession,
 	type AgentSessionEvent,
+	type AgentToolResult,
 	type ResourceLoader,
+	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 
 /** A resolved model, derived rather than imported: the docs disagree on whether
@@ -32,15 +35,28 @@ export type StageModel = NonNullable<ReturnType<ModelRuntime["getModel"]>>;
 /** The events the turn budget and telemetry depend on. */
 export type StageEventType = AgentSessionEvent["type"];
 
+/**
+ * The `customTools` option, which the SDK's own JSDoc does not advertise
+ * alongside `tools`. Naming it here means a release that drops or renames it
+ * fails typecheck rather than quietly leaving the query planner tool-less —
+ * unknown tool names are silently ignored, so nothing else would notice.
+ */
+export type CustomToolsOption = NonNullable<
+	NonNullable<Parameters<typeof createAgentSession>[0]>["customTools"]
+>;
+
 export type {
 	AgentSession,
 	AgentSessionEvent,
+	AgentToolResult,
 	ResourceLoader,
+	ToolDefinition,
 };
 
 export {
 	createAgentSession,
 	DefaultResourceLoader,
+	defineTool,
 	getAgentDir,
 	ModelRuntime,
 	parseFrontmatter,

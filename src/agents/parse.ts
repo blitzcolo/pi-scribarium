@@ -4,6 +4,8 @@ import { AgentDefinitionError } from "../util/errors.js";
 import {
 	AGENT_DEFAULTS,
 	BUILTIN_TOOLS,
+	CUSTOM_TOOLS,
+	isCustomTool,
 	THINKING_LEVELS,
 	type AgentDefinition,
 	type AgentFrontmatter,
@@ -36,6 +38,9 @@ export function normalizeTools(value: unknown, filePath: string): readonly strin
 		// mean "unset", which resolves to DEFAULT_TOOLS — a read-only set — so
 		// `tools: all` granted strictly *fewer* tools than spelling them out, and
 		// the agent burned its whole budget before failing without a `write`.
+		// Note `all` covers the built-ins only. A custom tool reaches the network,
+		// and that has to be an explicit grant rather than something a shorthand
+		// hands out (see CUSTOM_TOOLS).
 		if (trimmed === "all") return [...BUILTIN_TOOLS];
 		if (trimmed === "" || trimmed === "none") return [];
 		names = trimmed
@@ -50,14 +55,16 @@ export function normalizeTools(value: unknown, filePath: string): readonly strin
 	}
 
 	const deduped = [...new Set(names)];
-	const unknown = deduped.filter((name) => !BUILTIN_TOOLS.includes(name as never));
+	const unknown = deduped.filter(
+		(name) => !BUILTIN_TOOLS.includes(name as never) && !isCustomTool(name),
+	);
 	if (unknown.length > 0) {
 		// pi silently ignores unknown tool names, which would leave the agent
 		// quietly tool-less. Fail loudly instead.
 		throw new AgentDefinitionError(
 			filePath,
 			`unknown tool${unknown.length > 1 ? "s" : ""} ${unknown.map((n) => `"${n}"`).join(", ")}. ` +
-				`Valid tools: ${BUILTIN_TOOLS.join(", ")}`,
+				`Valid tools: ${[...BUILTIN_TOOLS, ...CUSTOM_TOOLS].join(", ")}`,
 		);
 	}
 	return deduped;

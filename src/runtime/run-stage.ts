@@ -6,6 +6,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import { DEFAULT_TOOLS, type AgentDefinition, type ThinkingLevelName } from "../agents/types.js";
+import { buildCustomTools, type CustomToolContext } from "./custom-tools.js";
 import { resolveStageModel } from "./model.js";
 import { createStageResourceLoader } from "./resource-loader.js";
 import { enterChildDepth } from "../util/safety.js";
@@ -97,6 +98,14 @@ export interface RunStageOptions {
 	/** When set, the session transcript is persisted here as JSONL. */
 	sessionDir?: string;
 	outputLimitBytes?: number;
+	/**
+	 * Dependencies for the custom tools this agent's `tools:` list grants.
+	 *
+	 * Only consulted for names in `CUSTOM_TOOLS`; an agent that grants none — every
+	 * shipped agent but the query planner — builds no custom tool and cannot reach
+	 * the network however this is set.
+	 */
+	customToolContext?: CustomToolContext;
 	/** Cancels the stage; surfaces as an `aborted` result. */
 	signal?: AbortSignal;
 	onEvent?: (event: StageEvent) => void;
@@ -185,6 +194,11 @@ export async function runStage(options: RunStageOptions): Promise<RunStageResult
 	// `tools` is a strict allowlist; [] is honoured as "no tools".
 	const tools = [...(agent.tools ?? DEFAULT_TOOLS)];
 
+	// Custom tool names stay in `tools` as well as being constructed here: the
+	// SDK filters custom tools through the same allowlist, so a tool built but
+	// left out of the list is silently unavailable.
+	const customTools = buildCustomTools(tools, options.customToolContext ?? {});
+
 	const sessionManager =
 		options.sessionDir !== undefined
 			? SessionManager.create(options.cwd, options.sessionDir)
@@ -199,6 +213,7 @@ export async function runStage(options: RunStageOptions): Promise<RunStageResult
 		settingsManager,
 		// `tools` is a strict allowlist; [] is honoured as "no tools".
 		tools,
+		...(customTools.length > 0 ? { customTools } : {}),
 		...(resolved !== undefined ? { model: resolved.model } : {}),
 		...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
 	});
