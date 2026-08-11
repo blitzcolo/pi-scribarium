@@ -1,0 +1,35 @@
+{
+  "total": 2,
+  "offset": 0,
+  "data": [
+    {
+      "paperId": "9f8e7d6c5b4a39281706f5e4d3c2b1a098765432",
+      "title": "Cross-Modal Attention for Infrared and Visible Image Fusion under Weak Supervision",
+      "abstract": "We propose a cross-modal attention module that aligns infrared and visible features without paired annotations. Experiments on three benchmarks show consistent gains, and we discuss the conditions under which the alignment degrades.",
+      "year": 2023,
+      "venue": "IEEE Transactions on Pattern Analysis and Machine Intelligence",
+      "citationCount": 214,
+      "openAccessPdf": { "url": "https://example.org/oa/zhang2023.pdf", "status": "GREEN" },
+      "externalIds": {
+        "DOI": "10.1109/TPAMI.2023.1234567",
+        "ArXiv": "2301.04567",
+        "CorpusId": 255001234
+      },
+      "authors": [
+        { "authorId": "1741101", "name": "Wei Zhang" },
+        { "authorId": "2065512", "name": "Maria González" }
+      ]
+    },
+    {
+      "paperId": "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d",
+      "title": "Thermal-Guided Pseudo-Labelling for Nighttime Object Detection",
+      "abstract": "Nighttime detection suffers from a lack of annotated data. We generate pseudo-labels from a thermal stream and show that a detector trained on them transfers to unseen city scenes.",
+      "year": 2022,
+      "venue": "CVPR",
+      "citationCount": 87,
+      "openAccessPdf": null,
+      "externalIds": { "DOI": "10.1109/CVPR52688.2022.0099", "CorpusId": 249887766 },
+      "authors": [{ "authorId": "3312001", "name": "Priya Nair" }]
+    }
+  ]
+}

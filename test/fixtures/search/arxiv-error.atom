@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <link href="http://arxiv.org/api/errors" rel="self" type="application/atom+xml"/>
+  <title type="html">ArXiv Query: search_query=&amp;id_list=&amp;start=0&amp;max_results=10</title>
+  <id>http://arxiv.org/api/errors</id>
+  <updated>2026-01-15T00:00:00-05:00</updated>
+  <opensearch:totalResults xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">1</opensearch:totalResults>
+  <entry>
+    <id>http://arxiv.org/api/errors#incorrect_id_format_for_abc</id>
+    <title>Error</title>
+    <summary>incorrect id format for abc</summary>
+    <updated>2026-01-15T00:00:00-05:00</updated>
+    <author>
+      <name>arXiv api core</name>
+    </author>
+    <link href="http://arxiv.org/api/errors#incorrect_id_format_for_abc" rel="alternate" type="text/html"/>
+  </entry>
+</feed>

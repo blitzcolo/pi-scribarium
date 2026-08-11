@@ -2,6 +2,8 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 
+import { slug } from "../util/slug.js";
+
 /**
  * Corpus ingestion.
  *
@@ -81,13 +83,7 @@ function isNotADocument(name: string): boolean {
 
 /** Filesystem-safe, stable identifier derived from a file name. */
 export function slugify(filePath: string): string {
-	const base = path.basename(filePath, path.extname(filePath));
-	const slug = base
-		.normalize("NFKD")
-		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, "-")
-		.replace(/^-+|-+$/g, "");
-	return slug.length > 0 ? slug : "document";
+	return slug(path.basename(filePath, path.extname(filePath)), "document");
 }
 
 /**

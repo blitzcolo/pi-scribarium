@@ -1,0 +1,46 @@
+{
+  "meta": { "count": 2, "page": 1, "per_page": 25 },
+  "results": [
+    {
+      "id": "https://openalex.org/W4312345678",
+      "doi": "https://doi.org/10.1109/tpami.2023.1234567",
+      "title": "Cross-modal attention for infrared and visible image fusion under weak supervision",
+      "display_name": "Cross-modal attention for infrared and visible image fusion under weak supervision",
+      "publication_year": 2023,
+      "cited_by_count": 231,
+      "authorships": [
+        { "author": { "id": "https://openalex.org/A1", "display_name": "Wei Zhang" } },
+        { "author": { "id": "https://openalex.org/A2", "display_name": "Maria González" } }
+      ],
+      "primary_location": {
+        "source": { "display_name": "IEEE Transactions on Pattern Analysis and Machine Intelligence" }
+      },
+      "best_oa_location": { "pdf_url": "https://example.org/oa/zhang2023-openalex.pdf" },
+      "abstract_inverted_index": {
+        "We": [0],
+        "propose": [1],
+        "a": [2],
+        "cross-modal": [3],
+        "attention": [4],
+        "module": [5],
+        "for": [6],
+        "unpaired": [7],
+        "data.": [8]
+      }
+    },
+    {
+      "id": "https://openalex.org/W4387654321",
+      "doi": null,
+      "title": "Boundary conditions of sensor fusion in adverse weather",
+      "display_name": "Boundary conditions of sensor fusion in adverse weather",
+      "publication_year": 2021,
+      "cited_by_count": 42,
+      "authorships": [
+        { "author": { "id": "https://openalex.org/A9", "display_name": "Hans Müller" } }
+      ],
+      "primary_location": { "source": { "display_name": "Sensors" } },
+      "best_oa_location": null,
+      "abstract_inverted_index": null
+    }
+  ]
+}

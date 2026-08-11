@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
+import { slug } from "../util/slug.js";
 import { PipelineError } from "./load.js";
 import type { ForeachItem, ForeachSource } from "./schema.js";
 
@@ -103,14 +104,4 @@ function toItem(value: Record<string, unknown> | string | number, index: number)
 	const explicit = value["id"];
 	const id = typeof explicit === "string" && explicit.length > 0 ? slug(explicit) : `item-${index + 1}`;
 	return { ...value, id, index };
-}
-
-/** Filesystem-safe id. Matches how ingest names extracted documents. */
-function slug(value: string): string {
-	const cleaned = value
-		.normalize("NFKD")
-		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, "-")
-		.replace(/^-+|-+$/g, "");
-	return cleaned.length > 0 ? cleaned : "item";
 }
