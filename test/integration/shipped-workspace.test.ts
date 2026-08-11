@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { discoverAgents } from "../../src/agents/discover.js";
 import { AgentRegistry } from "../../src/agents/registry.js";
 import { commandInit } from "../../src/cli/commands/init.js";
+import { resolvePipelinePath } from "../../src/cli/commands/run.js";
 import { loadPipeline } from "../../src/pipeline/load.js";
 import type { BuiltinStepSpec, PipelineSpec } from "../../src/pipeline/schema.js";
 
@@ -118,6 +119,152 @@ describe("the shipped pipeline", () => {
 		const profile = spec.steps.find((s) => s.id === "profile");
 		if (profile?.kind !== "agent") throw new Error("profile must be an agent step");
 		expect(profile.input).not.toContain("references");
+	});
+
+	// The whole paper flow predates any network access and must keep working
+	// without it. A search or fetch step appearing here would silently move a
+	// documented offline guarantee.
+	it("reaches the network in no step and grants no networked tool", () => {
+		const registry = shippedRegistry();
+		for (const step of spec.steps) {
+			if (step.kind === "builtin") {
+				expect(step.run).not.toMatch(/search-papers|fetch-papers/);
+			}
+			if (step.kind === "agent" || step.kind === "foreach") {
+				expect(registry.get(step.agent)?.tools ?? []).not.toContain("search_papers");
+			}
+		}
+	});
+});
+
+describe("the shipped explore pipeline", () => {
+	let spec: PipelineSpec;
+
+	beforeEach(() => {
+		spec = loadPipeline(path.join(process.cwd(), "pipelines", "explore.yaml"), shippedRegistry(), {
+			name: "demo",
+		});
+	});
+
+	it("loads and validates against the shipped agents", () => {
+		expect(spec.steps.length).toBeGreaterThan(0);
+	});
+
+	// Both gates guard spending, so their position is the design rather than a
+	// detail: candidates before the search is paid for, follow-ups before the
+	// second round is.
+	it("gates before each of the two spending decisions", () => {
+		const order = spec.steps.map((step) => step.id);
+		const gates = spec.steps.filter((step) => step.kind === "gate").map((step) => step.id);
+
+		expect(gates).toEqual(["prune-candidates", "approve-round2"]);
+		expect(order.indexOf("prune-candidates")).toBeLessThan(order.indexOf("search-round1"));
+		expect(order.indexOf("approve-round2")).toBeLessThan(order.indexOf("search-round2"));
+	});
+
+	// The candidate list is the cheapest thing to redo; the collation is
+	// deterministic and would regenerate identically, so it deliberately has no
+	// rewind target.
+	it("rewinds a rejected candidate list to ideation and nothing else", () => {
+		const gates = spec.steps.filter((step) => step.kind === "gate");
+		expect(gates[0]).toMatchObject({ id: "prune-candidates", onReject: "ideate" });
+		expect(gates[1]?.kind === "gate" ? gates[1].onReject : "unset").toBeUndefined();
+	});
+
+	it("caps both rounds so the two together cannot exceed the budget", () => {
+		const byId = new Map(
+			spec.steps
+				.filter((step): step is BuiltinStepSpec => step.kind === "builtin")
+				.map((step) => [step.id, step]),
+		);
+
+		expect(byId.get("search-round1")?.with["max_total"]).toBe("100");
+		expect(byId.get("search-round2")?.with["max_total"]).toBe("150");
+		// Round two must subtract what round one already fetched, or the cap is
+		// per-round rather than total.
+		expect(byId.get("search-round2")?.with["exclude"]).toContain("results-round1.json");
+		expect(byId.get("collate-followups")?.with["max_total"]).toBe("150");
+	});
+
+	// Exactly one agent may reach the network, and it is the one that cannot
+	// commit any spending.
+	it("grants the search tool to the query planner alone", () => {
+		const registry = shippedRegistry();
+		const granted = spec.steps
+			.filter((step) => step.kind === "agent" || step.kind === "foreach")
+			.filter((step) => (registry.get(step.agent)?.tools ?? []).includes("search_papers"))
+			.map((step) => step.id);
+
+		expect(granted).toEqual(["plan-queries"]);
+	});
+
+	// The analysts and the judge must not be able to shell out or edit in place:
+	// the tool allowlist is the only containment there is.
+	it("gives no stage the bash tool", () => {
+		const registry = shippedRegistry();
+		for (const step of spec.steps) {
+			if (step.kind !== "agent" && step.kind !== "foreach") continue;
+			expect(registry.get(step.agent)?.tools ?? []).not.toContain("bash");
+		}
+	});
+
+	// Round two re-globs the same directory as round one, so without the cache
+	// every round-one paper would be analysed and paid for twice.
+	it("analyses over one cached glob in both rounds", () => {
+		const rounds = spec.steps.filter(
+			(step) => step.id === "analyze" || step.id === "analyze-round2",
+		);
+		expect(rounds).toHaveLength(2);
+		for (const step of rounds) {
+			if (step.kind !== "foreach") throw new Error(`${step.id} must be a fan-out`);
+			expect(step.cache).toBe(true);
+			// Vars in a source or an output resolve at run time, so the spec still
+			// holds the template — only `model:` is resolved by the loader.
+			expect(step.source).toEqual({
+				kind: "glob",
+				pattern: "explore/${vars.name_slug}/refs/text/*.md",
+			});
+			expect(step.outputs).toEqual(["explore/${vars.name_slug}/cards/${item.id}.md"]);
+		}
+	});
+
+	// Pruning at the gate means editing candidates.json, so every stage that
+	// enumerates candidates has to re-read it rather than carry an earlier copy.
+	it("drives the judging fan-out from the candidate file itself", () => {
+		const judge = spec.steps.find((step) => step.id === "judge");
+		if (judge?.kind !== "foreach") throw new Error("judge must be a fan-out");
+		expect(judge.source).toMatchObject({
+			kind: "json",
+			file: "explore/${vars.name_slug}/candidates.json",
+			path: "candidates",
+		});
+	});
+
+	// `init` deliberately does not copy explore.yaml into a workspace, so without
+	// a by-name lookup the only way to run it would be to spell out a path inside
+	// node_modules.
+	it("is reachable by bare name from any workspace", () => {
+		const empty = fs.mkdtempSync(path.join(os.tmpdir(), "scribarium-noship-"));
+		try {
+			for (const given of ["explore", "explore.yaml"]) {
+				expect(path.basename(resolvePipelinePath(given, empty))).toBe("explore.yaml");
+			}
+		} finally {
+			fs.rmSync(empty, { recursive: true, force: true });
+		}
+	});
+
+	// A pipeline the author edited into their own workspace must keep winning
+	// over the shipped file of the same name.
+	it("prefers a workspace copy over the shipped one", () => {
+		const ws = fs.mkdtempSync(path.join(os.tmpdir(), "scribarium-ownpipe-"));
+		try {
+			const own = path.join(ws, "explore.yaml");
+			fs.writeFileSync(own, "name: mine\nsteps: []\n");
+			expect(resolvePipelinePath("explore.yaml", ws)).toBe(own);
+		} finally {
+			fs.rmSync(ws, { recursive: true, force: true });
+		}
 	});
 });
 

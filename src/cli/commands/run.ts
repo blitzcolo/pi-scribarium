@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 
 import { AgentRegistry } from "../../agents/registry.js";
+import { shippedPipelinesDir } from "../../agents/shipped.js";
 import { selectGate } from "../../gates/select.js";
 import { initialRunState, runPipeline } from "../../pipeline/engine.js";
 import { loadPipeline } from "../../pipeline/load.js";
@@ -34,7 +35,7 @@ const DEFAULT_PIPELINES = ["pipeline.yaml", "pipelines/paper.yaml"];
 
 export async function commandRun(options: RunCommandOptions): Promise<number> {
 	const { workspace, agentDir } = options;
-	const pipelinePath = resolvePipeline(options);
+	const pipelinePath = resolvePipelinePath(options.pipelinePath, workspace);
 
 	const registry = AgentRegistry.load({ cwd: workspace, workspaceDir: workspace, agentDir });
 	for (const diagnostic of registry.diagnostics) {
@@ -112,18 +113,59 @@ export async function commandRun(options: RunCommandOptions): Promise<number> {
 	}
 }
 
-function resolvePipeline(options: RunCommandOptions): string {
-	if (options.pipelinePath !== undefined) {
-		const explicit = path.resolve(options.workspace, options.pipelinePath);
-		if (!fs.existsSync(explicit)) throw new UsageError(`Pipeline not found: ${explicit}`);
-		return explicit;
+export function resolvePipelinePath(given: string | undefined, workspace: string): string {
+	if (given !== undefined) {
+		for (const candidate of pipelineCandidates(given, workspace)) {
+			if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) return candidate;
+		}
+		throw new UsageError(
+			`Pipeline not found: ${given}\n` +
+				`Looked in the workspace, the current directory, and the shipped pipelines ` +
+				`(${shippedPipelineNames().join(", ")}).`,
+		);
 	}
 	for (const candidate of DEFAULT_PIPELINES) {
-		const resolved = path.join(options.workspace, candidate);
+		const resolved = path.join(workspace, candidate);
 		if (fs.existsSync(resolved)) return resolved;
 	}
 	throw new UsageError(
-		`No pipeline given and none found in ${options.workspace} ` +
+		`No pipeline given and none found in ${workspace} ` +
 			`(looked for ${DEFAULT_PIPELINES.join(", ")}). Pass one explicitly.`,
 	);
+}
+
+/**
+ * Where an explicitly named pipeline might be, most specific first.
+ *
+ * The workspace comes first because that is where a scaffolded `pipeline.yaml`
+ * and any pipeline the author edited live, and those must keep winning. The
+ * other two are additive: they only decide cases that would otherwise be a
+ * "not found" error.
+ *
+ * The shipped directory is last and matters most for `explore.yaml`, which
+ * `init` deliberately does not copy into a workspace — without this the only way
+ * to run it would be to spell out a path inside node_modules.
+ */
+function pipelineCandidates(given: string, workspace: string): string[] {
+	const shipped = shippedPipelinesDir();
+	const bare = path.basename(given);
+	const named = bare.endsWith(".yaml") || bare.endsWith(".yml") ? bare : `${bare}.yaml`;
+
+	return [
+		path.resolve(workspace, given),
+		path.resolve(given),
+		path.join(shipped, named),
+	];
+}
+
+function shippedPipelineNames(): string[] {
+	try {
+		return fs
+			.readdirSync(shippedPipelinesDir())
+			.filter((name) => name.endsWith(".yaml"))
+			.map((name) => path.basename(name, ".yaml"))
+			.sort();
+	} catch {
+		return [];
+	}
 }

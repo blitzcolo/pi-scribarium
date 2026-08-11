@@ -43,7 +43,13 @@ export interface ScriptStep {
 }
 
 export interface ScriptContext {
-	/** 1-based index of this assistant turn within the session. */
+	/**
+	 * 1-based index of this assistant turn across the whole runtime.
+	 *
+	 * Not per session: one runtime serves every stage of a pipeline run, so a
+	 * script driving several stages cannot use this to mean "first turn of this
+	 * stage" — key off `lastUserText` or `messageCount` for that.
+	 */
 	turn: number;
 	systemPrompt: string;
 	/** Text of the most recent user message, if any. */

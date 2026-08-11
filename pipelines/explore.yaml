@@ -1,0 +1,279 @@
+version: 1
+name: explore
+description: >
+  Propose candidate contributions from a research direction and the author's own
+  material, then test each one against the published literature and report which
+  are taken, crowded, partly done, or unclaimed.
+
+defaults:
+  max_turns: 30
+
+vars:
+  # What you want to work on. Any language; the pipeline translates internally
+  # for searching and reports back in the language you used here.
+  direction: "State your research direction, or override with --var direction=..."
+
+  # Short handle naming this exploration's directory, explore/<name>/. Keep it
+  # ASCII: it becomes a path, and a name in a script that does not fold onto
+  # ASCII would slug away to nothing. The direction above is deliberately not
+  # used for this.
+  name: "exploration"
+
+  language: "Write reports in the language the research direction is written in."
+
+  # Model roles rather than provider names, as in paper.yaml. `bulk` is one call
+  # per fetched paper — a hundred or more of them — so a cheap fast model is the
+  # right trade there and not in the judging.
+  bulk: ""
+  judgement: ""
+
+steps:
+  # The author's own material. Extraction only; their Markdown and LaTeX stay
+  # where they are.
+  - id: ingest-source
+    builtin: ingest
+    with:
+      from: source
+      only: pdf
+      optional: true
+
+  # Candidates first, before any money is spent on searching. Everything after
+  # this point is priced per candidate, which is exactly why a human prunes the
+  # list at the next step.
+  - id: ideate
+    agent: innovation-ideator
+    model: ${vars.judgement}
+    input: |
+      Research direction: ${vars.direction}
+
+      The author's own material is under source/ (extracted PDFs in
+      source/text/). Read all of it before proposing anything: a candidate that
+      does not build on what this author already has is not theirs to make.
+
+      Propose 5-10 candidate contributions, each with English search queries.
+
+      Language: ${vars.language}
+    output:
+      - explore/${vars.name_slug}/candidates.md
+      - explore/${vars.name_slug}/candidates.json
+      - explore/${vars.name_slug}/assets.md
+
+  # The cheapest place to change direction. Every later stage is priced against
+  # this list: roughly ten papers searched, fetched and analysed per candidate.
+  #
+  # Pruning means editing candidates.json — the later stages re-read it, so a
+  # candidate deleted here disappears from the search, the analysis and the
+  # report together.
+  - id: prune-candidates
+    gate: Review the candidate contributions before the literature search
+    show: explore/${vars.name_slug}/candidates.md
+    on_reject: ideate
+
+  # The only stage that touches the network from inside a session, and the only
+  # one granted the search_papers tool. It probes; it never downloads.
+  #
+  # This exists because a query that returns nothing is indistinguishable
+  # downstream from a topic nobody has studied — and that false novelty claim is
+  # the worst thing this pipeline could produce. Better to find out here, for the
+  # price of a few searches, than in the report.
+  - id: plan-queries
+    agent: search-planner
+    model: ${vars.judgement}
+    max_turns: 60
+    input: |
+      Candidate contributions: explore/${vars.name_slug}/candidates.json
+      (Some may have been deleted by a reviewer. Plan only for those that remain.)
+
+      Probe each candidate's draft queries with search_papers and refine them
+      until they return relevant work. Then write the query file.
+    output: explore/${vars.name_slug}/queries.json
+
+  # Deterministic. The cap is a budget, and a budget a model can talk itself
+  # past is not one.
+  - id: search-round1
+    builtin: search-papers
+    with:
+      queries: explore/${vars.name_slug}/queries.json
+      out: explore/${vars.name_slug}/results-round1.json
+      round: "1"
+      per_query_limit: "25"
+      max_total: "100"
+
+  # Downloads open-access PDFs; everything else becomes an abstract-only stub
+  # carrying a banner. One uniform corpus reaches ingest either way, and the
+  # weaker evidence stays labelled all the way to the verdict.
+  #
+  # Nothing already on disk is re-fetched, so a run killed here resumes owing
+  # only what it had not downloaded.
+  - id: fetch-round1
+    builtin: fetch-papers
+    with:
+      results: explore/${vars.name_slug}/results-round1.json
+      dir: explore/${vars.name_slug}/refs
+
+  - id: ingest-refs
+    builtin: ingest
+    with:
+      from: explore/${vars.name_slug}/refs
+      optional: true
+
+  # The map half. One session per paper: a hundred and fifty papers never have
+  # to fit in one context window, and one unreadable file cannot discard the
+  # analyses already paid for.
+  - id: analyze
+    agent: prior-work-analyst
+    model: ${vars.bulk}
+    foreach: "explore/${vars.name_slug}/refs/text/*.md"
+    parallel: 4
+    cache: true
+    optional: true
+    input: |
+      Analyse the paper at ${item.path}.
+
+      Its metadata sidecar is explore/${vars.name_slug}/refs/meta/${item.stem}.json —
+      identifiers, year, venue and citation count come from there, never from
+      memory.
+
+      The candidate contributions are in explore/${vars.name_slug}/candidates.json.
+      Record which ones this paper bears on and exactly how it overlaps them.
+    output: explore/${vars.name_slug}/cards/${item.id}.md
+
+  # Bibliographic snowballing: the papers that matter are often cited by the
+  # papers a keyword search finds, without matching the keywords themselves.
+  #
+  # Deterministic, because the judgement — is this reference worth chasing —
+  # already happened in the session that read the paper and wrote the reason.
+  # Counting how many analysts independently named the same work is arithmetic.
+  - id: collate-followups
+    builtin: collate-followups
+    with:
+      cards: explore/${vars.name_slug}/cards
+      known: explore/${vars.name_slug}/results-round1.json
+      out: explore/${vars.name_slug}/followups.json
+      summary: explore/${vars.name_slug}/followups.md
+      max_total: "150"
+
+  # Second and last spending decision. Two rounds is structural rather than a
+  # loop because the returns fall off sharply: round two catches the classics
+  # every paper cites, round three mostly re-finds round two.
+  #
+  # No on_reject: collating is deterministic, so regenerating it would produce
+  # the identical list. Pruning means editing followups.json — and approving with
+  # an emptied list ends the search at round one.
+  - id: approve-round2
+    gate: Review the follow-up references before the second search round
+    show: explore/${vars.name_slug}/followups.md
+
+  - id: search-round2
+    builtin: search-papers
+    with:
+      queries: explore/${vars.name_slug}/followups.json
+      out: explore/${vars.name_slug}/results-round2.json
+      round: "2"
+      per_query_limit: "10"
+      exclude: explore/${vars.name_slug}/results-round1.json
+      max_total: "150"
+
+  - id: fetch-round2
+    builtin: fetch-papers
+    with:
+      results: explore/${vars.name_slug}/results-round2.json
+      dir: explore/${vars.name_slug}/refs
+
+  - id: ingest-refs-2
+    builtin: ingest
+    with:
+      from: explore/${vars.name_slug}/refs
+      optional: true
+
+  # The same glob, the same agent, the same output template as `analyze`. Round
+  # one's cards are all newer than their sources, so `cache: true` skips them and
+  # only the round-two papers are paid for. Expressing it as a second step rather
+  # than a loop keeps every stage a plain forward edge, which is what makes
+  # resume and the gates work.
+  - id: analyze-round2
+    agent: prior-work-analyst
+    model: ${vars.bulk}
+    foreach: "explore/${vars.name_slug}/refs/text/*.md"
+    parallel: 4
+    cache: true
+    optional: true
+    input: |
+      Analyse the paper at ${item.path}.
+
+      Its metadata sidecar is explore/${vars.name_slug}/refs/meta/${item.stem}.json —
+      identifiers, year, venue and citation count come from there, never from
+      memory.
+
+      The candidate contributions are in explore/${vars.name_slug}/candidates.json.
+      Record which ones this paper bears on and exactly how it overlaps them.
+    output: explore/${vars.name_slug}/cards/${item.id}.md
+
+  # A browsing aid for the human, not an input to any stage.
+  - id: index-cards
+    builtin: build-index
+    with:
+      from: explore/${vars.name_slug}/cards
+      out: explore/${vars.name_slug}/cards-index.md
+
+  # Groups the cards by the candidate each bears on, and states what the evidence
+  # for each is made of: full texts, abstracts, papers that could not be fetched,
+  # follow-ups never chased. That header is what keeps a verdict honest.
+  - id: collate-evidence
+    builtin: collate-evidence
+    with:
+      cards: explore/${vars.name_slug}/cards
+      candidates: explore/${vars.name_slug}/candidates.json
+      manifest: explore/${vars.name_slug}/refs/manifest.json
+      followups: explore/${vars.name_slug}/followups.json
+      results: explore/${vars.name_slug}/results-round2.json
+      out_dir: explore/${vars.name_slug}/evidence
+
+  # One session per candidate, reading only that candidate's packet. Cleaner
+  # context than one session over a hundred and fifty cards, independent
+  # judgements rather than ones drifting toward whatever was read last, and a
+  # single verdict can be re-run without redoing the others.
+  - id: judge
+    agent: novelty-judge
+    model: ${vars.judgement}
+    foreach:
+      json: explore/${vars.name_slug}/candidates.json
+      path: candidates
+    parallel: 3
+    input: |
+      Candidate ${item.id}: ${item.title}
+
+      Your evidence packet is explore/${vars.name_slug}/evidence/${item.id}.md.
+      Read it and every card it lists. Do not open the full papers — the cards
+      are the contract.
+
+      The author's material is summarised in explore/${vars.name_slug}/assets.md.
+      Judge feasibility against that, and do not read source/ yourself.
+
+      Language: ${vars.language}
+    output: explore/${vars.name_slug}/verdicts/${item.id}.md
+
+  - id: merge-verdicts
+    builtin: assemble
+    with:
+      sections: explore/${vars.name_slug}/candidates.json
+      path: candidates
+      from: explore/${vars.name_slug}/verdicts
+      out: explore/${vars.name_slug}/verdicts-merged.md
+
+  - id: report
+    agent: exploration-overviewer
+    model: ${vars.judgement}
+    input: |
+      Research direction: ${vars.direction}
+
+      Verdicts: ${steps.merge-verdicts.outputs}
+      The author's material: explore/${vars.name_slug}/assets.md
+      Corpus statistics: explore/${vars.name_slug}/refs/manifest.json
+
+      Rank the candidates on novelty against feasibility and recommend which to
+      pursue. Keep the closed ones in the table with their evidence — otherwise
+      the same idea gets proposed again in six months.
+
+      Language: ${vars.language}
+    output: explore/${vars.name_slug}/report.md
