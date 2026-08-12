@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 
 import { AgentRegistry } from "../../agents/registry.js";
+import { onInterrupt } from "../interrupt.js";
 import { selectGate } from "../../gates/select.js";
 import { writeDecision } from "../../gates/file.js";
 import type { GateDecision } from "../../gates/types.js";
@@ -93,8 +94,7 @@ export async function commandResume(options: ResumeOptions): Promise<number> {
 
 	const reporter = makeReporter(options.quiet);
 	const controller = new AbortController();
-	const onSigint = (): void => controller.abort();
-	process.on("SIGINT", onSigint);
+	const releaseInterrupt = onInterrupt(controller);
 
 	try {
 		const final = await runPipeline({
@@ -119,7 +119,7 @@ export async function commandResume(options: ResumeOptions): Promise<number> {
 		if (final.status === "completed") return 0;
 		return final.status === "aborted" ? 130 : 1;
 	} finally {
-		process.off("SIGINT", onSigint);
+		releaseInterrupt();
 	}
 }
 

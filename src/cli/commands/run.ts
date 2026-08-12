@@ -5,6 +5,7 @@ import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 
 import { AgentRegistry } from "../../agents/registry.js";
 import { shippedPipelinesDir } from "../../agents/shipped.js";
+import { onInterrupt } from "../interrupt.js";
 import { selectGate } from "../../gates/select.js";
 import { initialRunState, runPipeline } from "../../pipeline/engine.js";
 import { loadPipeline } from "../../pipeline/load.js";
@@ -68,11 +69,7 @@ export async function commandRun(options: RunCommandOptions): Promise<number> {
 
 	const reporter = makeReporter(options.quiet);
 	const controller = new AbortController();
-	const onSigint = (): void => {
-		process.stderr.write("\ninterrupted; stopping (resume this run to continue)\n");
-		controller.abort();
-	};
-	process.on("SIGINT", onSigint);
+	const releaseInterrupt = onInterrupt(controller);
 
 	try {
 		const final = await runPipeline({
@@ -109,7 +106,7 @@ export async function commandRun(options: RunCommandOptions): Promise<number> {
 		process.stderr.write(`\nRun ${final.status}. Inspect ${layout.runDir}\n`);
 		return final.status === "aborted" ? 130 : 1;
 	} finally {
-		process.off("SIGINT", onSigint);
+		releaseInterrupt();
 	}
 }
 

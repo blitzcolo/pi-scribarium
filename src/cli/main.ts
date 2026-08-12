@@ -6,6 +6,7 @@ import { commandDecide } from "./commands/decide.js";
 import { commandEvents, commandReport, commandStatus } from "./commands/inspect.js";
 import { commandInit } from "./commands/init.js";
 import { commandRedo } from "./commands/redo.js";
+import { onInterrupt } from "./interrupt.js";
 import { collectCorpusInputs, formatPageRanges, ingestCorpus } from "../ingest/pdf.js";
 import { PreflightError, ScribariumError, UsageError } from "../util/errors.js";
 import { assertDepthAllowed } from "../util/safety.js";
@@ -503,8 +504,10 @@ async function commandRunAgent(args: ParsedArgs): Promise<number> {
 	const sessionDir = flagString(args, "session-dir");
 	const quiet = flagBoolean(args, "quiet");
 	const controller = new AbortController();
-	const onSigint = (): void => controller.abort();
-	process.on("SIGINT", onSigint);
+	const releaseInterrupt = onInterrupt(controller, {
+		message: "\ninterrupted; asking the agent to stop",
+		forcedMessage: "forced; the stage was abandoned mid-run",
+	});
 
 	try {
 		const result = await runStage({
@@ -530,7 +533,7 @@ async function commandRunAgent(args: ParsedArgs): Promise<number> {
 		}
 		return result.status === "completed" ? 0 : 1;
 	} finally {
-		process.off("SIGINT", onSigint);
+		releaseInterrupt();
 	}
 }
 
