@@ -37,8 +37,18 @@ export function commandDecide(
 	}
 
 	writeDecision(layout, pending, decision);
+
+	// The ids are not checked here: this command deliberately does not load the
+	// pipeline, so it cannot know what the gate's list contains. The engine checks
+	// them on resume and refuses the whole decision if any is unknown, rather than
+	// keeping the subset it recognised.
+	const scope =
+		decision.kind === "approve" && decision.keep !== undefined
+			? `, keeping ${decision.keep.join(", ")}`
+			: "";
 	process.stdout.write(
-		`Recorded ${decision.kind} for ${pending}. Continue with: scribarium resume ${resolved}\n`,
+		`Recorded ${decision.kind} for ${pending}${scope}. ` +
+			`Continue with: scribarium resume ${resolved}\n`,
 	);
 	return 0;
 }

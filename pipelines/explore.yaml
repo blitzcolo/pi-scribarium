@@ -61,12 +61,21 @@ steps:
   # The cheapest place to change direction. Every later stage is priced against
   # this list: roughly ten papers searched, fetched and analysed per candidate.
   #
-  # Pruning means editing candidates.json — the later stages re-read it, so a
-  # candidate deleted here disappears from the search, the analysis and the
-  # report together.
+  # Pruning is deterministic: `approve --keep ip-1,ip-3` deletes the rest from
+  # candidates.json, and the later stages re-read it, so a dropped candidate
+  # disappears from the search, the analysis and the report together. Editing the
+  # file by hand still works and does more — it can reword a candidate, which
+  # selection cannot.
+  #
+  # It also buys depth. Round one searches 100 papers total, round-robin across
+  # every candidate's queries, so cutting nine candidates to three roughly triples
+  # the corpus behind each survivor.
   - id: prune-candidates
     gate: Review the candidate contributions before the literature search
     show: explore/${vars.name_slug}/candidates.md
+    select:
+      from: explore/${vars.name_slug}/candidates.json
+      path: candidates
     on_reject: ideate
 
   # The only stage that touches the network from inside a session, and the only

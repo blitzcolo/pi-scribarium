@@ -151,3 +151,22 @@ export function flagsMissingValues(args: ParsedArgs, ...names: string[]): string
 export function flagAll(args: ParsedArgs, name: string): string[] {
 	return args.repeated.get(name) ?? [];
 }
+
+/**
+ * Ids from `--keep`, which is both repeatable and comma-separated.
+ *
+ * Three outcomes, not two: `undefined` when the flag is absent, which means
+ * approve the whole list; the ids when there are any; and an empty array when
+ * the flag was given with nothing usable behind it. The caller must not collapse
+ * that last case into either of the others — read as "keep everything" it
+ * approves what the reviewer was cutting down, and read as "keep nothing" it
+ * deletes all of it.
+ */
+export function keepIds(args: ParsedArgs): string[] | undefined {
+	const given = flagAll(args, "keep");
+	if (given.length === 0) return undefined;
+	return given
+		.flatMap((value) => value.split(","))
+		.map((id) => id.trim())
+		.filter((id) => id.length > 0);
+}

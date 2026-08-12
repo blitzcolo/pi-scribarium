@@ -49,8 +49,26 @@ export function createFileGate(layout: RunLayout): GateHandler {
 					})),
 					onReject: request.step.onReject ?? null,
 					usageSoFar: request.usageSoFar,
+					// Published so the reviewer can see the ids without opening the JSON
+					// and guessing which field is the one --keep matches on.
+					...(request.selectable !== undefined
+						? {
+								selectable: {
+									file: request.selectable.file,
+									items: request.selectable.items,
+								},
+							}
+						: {}),
 					howToRespond: {
 						approve: `scribarium approve ${request.runId} ${request.step.id}`,
+						...(request.selectable !== undefined
+							? {
+									approveSome:
+										`scribarium approve ${request.runId} ${request.step.id} ` +
+										`--keep ${(request.selectable.items[0]?.id ?? "id-1")}` +
+										`${request.selectable.items.length > 1 ? `,${request.selectable.items[1]?.id}` : ""}`,
+								}
+							: {}),
 						reject: `scribarium reject ${request.runId} ${request.step.id} -m "what to change"`,
 						thenResume: `scribarium resume ${request.runId}`,
 					},
@@ -69,9 +87,16 @@ export function readDecision(layout: RunLayout, stepId: string): GateDecision | 
 	try {
 		const raw = fs.readFileSync(gateDecisionFile(layout, stepId), "utf-8");
 		const parsed = JSON.parse(raw) as GateDecision;
-		if (parsed.kind === "approve" || parsed.kind === "skip" || parsed.kind === "abort") {
-			return parsed;
+		if (parsed.kind === "approve") {
+			// A malformed keep list must not read as "keep everything": that would
+			// approve the whole list the reviewer was trying to cut down.
+			if (parsed.keep === undefined) return { kind: "approve" };
+			if (!Array.isArray(parsed.keep) || parsed.keep.some((id) => typeof id !== "string")) {
+				return undefined;
+			}
+			return { kind: "approve", keep: parsed.keep };
 		}
+		if (parsed.kind === "skip" || parsed.kind === "abort") return parsed;
 		if (parsed.kind === "reject" && typeof parsed.feedback === "string") return parsed;
 		return undefined;
 	} catch {

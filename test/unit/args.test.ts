@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { flagAll, flagBoolean, flagString, flagsMissingValues, parseArgs } from "../../src/cli/args.js";
+import {
+	flagAll,
+	flagBoolean,
+	flagString,
+	flagsMissingValues,
+	keepIds,
+	parseArgs,
+} from "../../src/cli/args.js";
 
 describe("parseArgs", () => {
 	it("separates the command from its positionals", () => {
@@ -142,5 +149,33 @@ describe("values that begin with a dash", () => {
 
 	it("keeps a lone dash as a positional", () => {
 		expect(parseArgs(["run", "-"]).positionals).toEqual(["-"]);
+	});
+});
+
+describe("keepIds", () => {
+	it("is undefined when --keep is absent, so the whole list is approved", () => {
+		expect(keepIds(parseArgs(["approve", "run-1"]))).toBeUndefined();
+	});
+
+	it("splits one comma-separated value", () => {
+		expect(keepIds(parseArgs(["approve", "--keep", "ip-1,ip-3"]))).toEqual(["ip-1", "ip-3"]);
+	});
+
+	it("accumulates a repeated flag", () => {
+		expect(keepIds(parseArgs(["approve", "--keep", "ip-1", "--keep", "ip-3,ip-4"]))).toEqual([
+			"ip-1",
+			"ip-3",
+			"ip-4",
+		]);
+	});
+
+	it("trims and drops blanks left by a trailing comma", () => {
+		expect(keepIds(parseArgs(["approve", "--keep", " ip-1 , ,ip-2,"]))).toEqual(["ip-1", "ip-2"]);
+	});
+
+	// Distinct from undefined on purpose: the caller has to reject this rather
+	// than pick one of the two wrong readings of it.
+	it("reports an empty list rather than nothing when the value is all separators", () => {
+		expect(keepIds(parseArgs(["approve", "--keep", ",,"]))).toEqual([]);
 	});
 });

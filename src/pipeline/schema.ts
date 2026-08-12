@@ -91,6 +91,20 @@ export interface ForeachStepSpec {
 	optional?: boolean;
 }
 
+/**
+ * A list the reviewer may prune before approving.
+ *
+ * Same shape as a `foreach` json source, and deliberately so: the list a gate
+ * lets you cut down is normally the one a later fan-out spends money on, and
+ * describing it twice in two ways would let the two drift apart.
+ */
+export interface GateSelectSpec {
+	/** JSON file holding the list. */
+	from: string;
+	/** Dotted path to the array inside it; the document itself when absent. */
+	path?: string;
+}
+
 export interface GateStepSpec {
 	kind: "gate";
 	id: string;
@@ -99,6 +113,8 @@ export interface GateStepSpec {
 	show: string[];
 	/** Step to re-run when the reviewer rejects. Must be an earlier step. */
 	onReject?: string;
+	/** Items the reviewer may keep a subset of. */
+	select?: GateSelectSpec;
 	outputs: string[];
 }
 

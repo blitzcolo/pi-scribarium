@@ -12,6 +12,7 @@ import { assertDepthAllowed } from "../util/safety.js";
 import { VERSION } from "../version.js";
 import {
 	flagAll,
+	keepIds,
 	flagBoolean,
 	flagsMissingValues,
 	flagString,
@@ -45,7 +46,7 @@ Commands:
   run [pipeline]            Run a pipeline end to end
   resume [runId]            Continue a run that stopped at a gate or a failure
   redo <step> [runId]       Re-open a finished step (and everything after it)
-  approve [runId] [step]    Approve a pending gate
+  approve [runId] [step]    Approve a pending gate (--keep to prune its list first)
   reject  [runId] [step]    Reject a gate and regenerate (-m "what to change")
   status [runId]            Where a run got to (defaults to the latest run)
   report [runId]            Token and cost accounting per step
@@ -70,6 +71,10 @@ run / resume options:
 
 redo options:
   -m, --message <text>      Feedback folded into the re-opened step's prompt
+
+approve options:
+  --keep <id,id>            Keep only these entries of the gate's list and delete
+                            the rest (repeatable). Only for a gate with select:.
 
 reject options:
   -m, --message <text>      Feedback folded into the regenerated step's prompt
@@ -116,6 +121,7 @@ const VALUE_FLAGS = [
 	"agent-dir",
 	"gate-mode",
 	"input",
+	"keep",
 	"m",
 	"message",
 	"model",
@@ -201,10 +207,13 @@ async function main(argv: readonly string[]): Promise<number> {
 				...(feedback !== undefined ? { feedback } : {}),
 			});
 		}
-		case "approve":
+		case "approve": {
+			const keep = parseKeepFlags(args);
 			return commandDecide(resolveWorkspace(args), args.positionals[0], args.positionals[1], {
 				kind: "approve",
+				...(keep !== undefined ? { keep } : {}),
 			});
+		}
 		case "reject": {
 			const feedback = flagString(args, "message", "m");
 			if (feedback === undefined) {
@@ -247,6 +256,21 @@ function parseVarFlags(args: ParsedArgs): Record<string, string> {
 		vars[value.slice(0, equals).trim()] = value.slice(equals + 1);
 	}
 	return vars;
+}
+
+/**
+ * `--keep` given with nothing usable behind it is a mistake worth stopping on:
+ * both readings are wrong. "Keep everything" approves the list the reviewer was
+ * cutting down, and "keep nothing" deletes all of it.
+ */
+function parseKeepFlags(args: ParsedArgs): string[] | undefined {
+	const ids = keepIds(args);
+	if (ids !== undefined && ids.length === 0) {
+		throw new UsageError(
+			"--keep expects one or more ids, e.g. --keep ip-1,ip-3. Omit it to approve everything.",
+		);
+	}
+	return ids;
 }
 
 /** Pure path resolution — no SDK, so the cheap commands stay cheap. */

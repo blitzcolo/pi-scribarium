@@ -333,11 +333,25 @@ scribarium resume                # continue; completed steps are never re-run
 Interrupted runs resume per item: a fan-out killed halfway re-runs only the
 papers it did not finish.
 
-Some gates ask you to **edit a file rather than write feedback**. The `explore`
-pipeline's two both work that way: you delete the candidates or the follow-up
-references you do not want from the JSON the gate names, then approve, and every
-later stage reads the pruned file. Rejecting is for work that should be
-regenerated; editing is for work that is right but too long.
+Some gates ask you to **cut a list down rather than write feedback**. The
+`explore` pipeline's two both work that way, and rejecting is the wrong tool for
+it: rejection throws the whole list away and regenerates it. Keeping a subset is
+its own answer.
+
+```bash
+scribarium approve --keep ip-1,ip-3,ip-7   # delete the rest, then continue
+```
+
+On a terminal the same gate offers `[k]eep some`, which lists the entries and
+asks which to keep. Either way the deletion is done by the orchestrator, not by a
+model: it is a filter on a JSON array, and a model doing it would cost a call and
+could reword the entries it was meant to preserve. The unpruned list is archived
+under `runs/<id>/attempts/` first, and an id that is not in the list is refused
+outright — a typo must not silently approve everything or delete everything.
+
+Editing the JSON by hand still works and does more, since it can also reword an
+entry. Use `--keep` for the common case, the editor when the list is right but
+the wording is not, and `reject` when the whole batch missed.
 
 ## Citation checking
 
@@ -414,11 +428,16 @@ candidates ranked on novelty against feasibility, and `verdicts/<id>.md` for eac
 one's prior work, next steps, and boundary conditions.
 
 **Two gates, both before money is spent.** The first shows you the candidate list
-before any searching — prune it by deleting entries from `candidates.json`, then
-approve. The second shows the follow-up references before the second search round;
-approving with an emptied `followups.json` stops at round one. Under `--gate-mode
-file` (the default when not on a terminal) the run exits `10` and waits for
-`scribarium approve <runId>`.
+before any searching: `scribarium approve --keep ip-1,ip-3` keeps those and
+deletes the rest. The second shows the follow-up references before the second
+search round; approving with an emptied `followups.json` stops at round one. Under
+`--gate-mode file` (the default when not on a terminal) the run exits `10` and
+waits for `scribarium approve <runId>`.
+
+Pruning buys depth as well as saving money. Round one searches 100 papers in
+total, shared round-robin across every surviving candidate's queries, so cutting
+nine candidates to three roughly triples the corpus behind each one that is left.
+Keeping a candidate you do not care about is not free.
 
 **Searching is English-only.** arXiv, Semantic Scholar and OpenAlex index
 English-language literature, so the agents translate your direction into the

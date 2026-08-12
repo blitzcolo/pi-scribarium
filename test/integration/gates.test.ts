@@ -348,3 +348,150 @@ steps:
 		).not.toThrow();
 	});
 });
+
+/**
+ * Pruning a gate's list.
+ *
+ * The list a gate lets you cut down is normally the one a later fan-out spends
+ * money on, so what matters is not that the file changed but that the fan-out
+ * downstream sees the cut.
+ */
+const SELECT_PIPELINE = `
+steps:
+  - id: propose
+    agent: outliner
+    input: Propose candidates.
+    output: explore/candidates.json
+  - id: prune
+    gate: Review the candidates
+    show: explore/candidates.json
+    select:
+      from: explore/candidates.json
+      path: candidates
+    on_reject: propose
+  - id: judge
+    agent: writer
+    foreach:
+      json: explore/candidates.json
+      path: candidates
+    input: Judge \${item.id}.
+    output: verdicts/\${item.id}.md
+`;
+
+/** Writes a real candidates.json for the first step, Markdown for the fan-out. */
+function proposer(): Script {
+	const written = new Set<string>();
+	return (ctx) => {
+		const target = /Write your output to (\S+?)\.\s*$/m.exec(ctx.lastUserText)?.[1];
+		if (target === undefined) return { text: "Done." };
+		if (written.has(target)) return { text: `Wrote ${target}.` };
+		written.add(target);
+
+		const body = target.endsWith(".json")
+			? `${JSON.stringify(
+					{
+						version: 1,
+						candidates: ["ip-1", "ip-2", "ip-3"].map((id) => ({
+							id,
+							title: `Candidate ${id}`,
+						})),
+					},
+					null,
+					2,
+				)}\n`
+			: `# ${target}\n`;
+		return { toolCalls: [{ name: "write", args: { path: target, content: body } }] };
+	};
+}
+
+describe("gate select", () => {
+	it("prunes the list and fans out over only what survived", async () => {
+		const script = proposer();
+		const first = await execute(script, undefined, undefined, SELECT_PIPELINE);
+		expect(first.final.status).toBe("awaiting_gate");
+
+		writeDecision(layout, "prune", { kind: "approve", keep: ["ip-1", "ip-3"] });
+		const { final } = await execute(script, first.final, first.scripted, SELECT_PIPELINE);
+
+		expect(final.status).toBe("completed");
+		expect(fs.existsSync(path.join(workspace, "verdicts/ip-1.md"))).toBe(true);
+		expect(fs.existsSync(path.join(workspace, "verdicts/ip-3.md"))).toBe(true);
+		// The point of the whole feature: the dropped candidate is never paid for.
+		expect(fs.existsSync(path.join(workspace, "verdicts/ip-2.md"))).toBe(false);
+		// `outputs` is the ordered one; `items` is keyed in completion order, so
+		// asserting its key sequence would pass or fail on scheduling.
+		expect(final.steps["judge"]?.outputs).toEqual(["verdicts/ip-1.md", "verdicts/ip-3.md"]);
+		expect(Object.keys(final.steps["judge"]?.items ?? {}).sort()).toEqual(["ip-1", "ip-3"]);
+	});
+
+	it("archives the unpruned list where a reviewer can get it back", async () => {
+		const script = proposer();
+		const first = await execute(script, undefined, undefined, SELECT_PIPELINE);
+		writeDecision(layout, "prune", { kind: "approve", keep: ["ip-2"] });
+		await execute(script, first.final, first.scripted, SELECT_PIPELINE);
+
+		const archived = fs
+			.readdirSync(path.join(layout.attemptsDir, "prune", "explore"), { recursive: true })
+			.map(String);
+		expect(archived.some((name) => name.startsWith("candidates.attempt"))).toBe(true);
+	});
+
+	// Approving without a keep list must not quietly become "keep nothing".
+	it("keeps everything when approved without a keep list", async () => {
+		const script = proposer();
+		const first = await execute(script, undefined, undefined, SELECT_PIPELINE);
+		writeDecision(layout, "prune", { kind: "approve" });
+		const { final } = await execute(script, first.final, first.scripted, SELECT_PIPELINE);
+
+		expect(final.steps["judge"]?.outputs).toEqual([
+			"verdicts/ip-1.md",
+			"verdicts/ip-2.md",
+			"verdicts/ip-3.md",
+		]);
+	});
+
+	// A typo must not spend the run on the subset it happened to recognise. The
+	// gate is left awaiting so the reviewer can answer again.
+	it("refuses an unknown id and leaves the gate awaiting", async () => {
+		const script = proposer();
+		const first = await execute(script, undefined, undefined, SELECT_PIPELINE);
+		writeDecision(layout, "prune", { kind: "approve", keep: ["ip-1", "ip-33"] });
+
+		await expect(
+			execute(script, first.final, first.scripted, SELECT_PIPELINE),
+		).rejects.toThrow(/Available: ip-1, ip-2, ip-3/);
+
+		const state = new RunStateStore(layout).load();
+		expect(state.steps["prune"]?.status).toBe("awaiting");
+		expect(fs.existsSync(path.join(workspace, "verdicts/ip-1.md"))).toBe(false);
+		const list = JSON.parse(
+			fs.readFileSync(path.join(workspace, "explore/candidates.json"), "utf-8"),
+		) as { candidates: Array<{ id: string }> };
+		expect(list.candidates.map((entry) => entry.id)).toEqual(["ip-1", "ip-2", "ip-3"]);
+	});
+
+	it("publishes the selectable ids in the file-gate request", async () => {
+		await execute(proposer(), undefined, undefined, SELECT_PIPELINE);
+
+		const request = JSON.parse(fs.readFileSync(gateRequestFile(layout, "prune"), "utf-8")) as {
+			selectable?: { file: string; items: Array<{ id: string; label?: string }> };
+			howToRespond: Record<string, string>;
+		};
+		expect(request.selectable?.file).toBe("explore/candidates.json");
+		expect(request.selectable?.items.map((item) => item.id)).toEqual(["ip-1", "ip-2", "ip-3"]);
+		expect(request.howToRespond["approveSome"]).toContain("--keep ip-1,ip-2");
+	});
+
+	// --keep against a gate with nothing to prune is a mistake worth naming: the
+	// reviewer believes they cut the list, and silently approving all of it is the
+	// one outcome they did not ask for.
+	it("refuses a keep list on a gate with no select", async () => {
+		const script = scribe();
+		const first = await execute(script);
+		writeDecision(layout, "approve-outline", { kind: "approve", keep: ["anything"] });
+
+		await expect(execute(script, first.final, first.scripted)).rejects.toThrow(
+			/does not declare "select:"/,
+		);
+	});
+});

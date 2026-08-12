@@ -17,6 +17,7 @@ import {
 	type StepState,
 } from "../workspace/run-state.js";
 import { clearDecision } from "../gates/file.js";
+import { applyKeep, KeepError, readSelectable } from "../gates/keep.js";
 import { archiveAttempt, buildRegeneratePrompt } from "../gates/regenerate.js";
 import type { GateHandler } from "../gates/types.js";
 import { redactSecrets } from "../util/safety.js";
@@ -73,7 +74,8 @@ export type PipelineEvent =
 	  }
 	| { type: "stage"; stepId: string; itemId?: string; event: StageEvent }
 	| { type: "gate_awaiting"; stepId: string; title: string }
-	| { type: "gate_decided"; stepId: string; decision: string; target?: string };
+	| { type: "gate_decided"; stepId: string; decision: string; target?: string }
+	| { type: "gate_pruned"; stepId: string; kept: number; dropped: string[] };
 
 /**
  * Execute a pipeline in order.
@@ -242,7 +244,7 @@ async function executeGate(
 	log: EventLog,
 ): Promise<GateOutcome> {
 	const { layout, onEvent } = options;
-	const handler = options.gate ?? (async () => ({ kind: "approve" as const }));
+	const handler: GateHandler = options.gate ?? (async () => ({ kind: "approve" }));
 
 	const scope = baseScope(options, state);
 	const artifacts = step.show.map((template) => {
@@ -277,15 +279,63 @@ async function executeGate(
 	onEvent?.({ type: "gate_awaiting", stepId: step.id, title: step.title });
 	log.append("gate_awaiting", { stepId: step.id });
 
+	// Resolved before the handler is called so both gate modes see the same list:
+	// the terminal prints it, the file protocol writes it into the request.
+	const selectFile =
+		step.select === undefined ? undefined : interpolate(step.select.from, scope);
+	const selectable =
+		selectFile === undefined
+			? undefined
+			: {
+					file: selectFile,
+					items: readSelectable(layout.artifact(selectFile), step.select?.path),
+				};
+
 	const decision = await handler({
 		step,
 		runId: layout.runId,
 		workspace: layout.workspace,
 		artifacts,
 		usageSoFar: state.usageTotal,
+		...(selectable !== undefined ? { selectable } : {}),
 	});
 
 	if (decision === "defer") return { kind: "defer" };
+
+	// Before the decision is recorded: a keep list that cannot be applied must
+	// leave the gate exactly as it found it, still awaiting, so the reviewer can
+	// correct the ids and answer again.
+	if (decision.kind === "approve" && decision.keep !== undefined) {
+		if (step.select === undefined || selectFile === undefined) {
+			throw new KeepError(
+				`Gate "${step.id}" does not declare "select:", so there is no list for --keep to ` +
+					`prune. Approve without it, or add select: to the step.`,
+			);
+		}
+		const result = applyKeep({
+			layout,
+			stepId: step.id,
+			select: step.select,
+			relativeFile: selectFile,
+			keep: decision.keep,
+			attempt: stepState.attempts + 1,
+		});
+		if (result.dropped.length > 0) {
+			log.append("gate_pruned", {
+				stepId: step.id,
+				file: selectFile,
+				kept: result.kept,
+				dropped: result.dropped,
+				...(result.archivedTo !== undefined ? { archivedTo: result.archivedTo } : {}),
+			});
+			onEvent?.({
+				type: "gate_pruned",
+				stepId: step.id,
+				kept: result.kept.length,
+				dropped: result.dropped,
+			});
+		}
+	}
 
 	(stepState.decisions ??= []).push({
 		at: new Date().toISOString(),

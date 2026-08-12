@@ -1,8 +1,13 @@
+import type { SelectableItem } from "./keep.js";
 import type { GateStepSpec } from "../pipeline/schema.js";
 import type { StageUsage } from "../runtime/run-stage.js";
 
 export type GateDecision =
-	| { kind: "approve" }
+	/**
+	 * `keep` prunes the gate's `select:` list to these ids before continuing.
+	 * Absent means keep everything, which is what an unattended `--yes` does.
+	 */
+	| { kind: "approve"; keep?: string[] }
 	/** Re-run `target` with `feedback` folded into its prompt. */
 	| { kind: "reject"; feedback: string; target?: string }
 	/** Continue past the gate without approving; the step is marked skipped. */
@@ -17,6 +22,12 @@ export interface GateRequest {
 	artifacts: Array<{ path: string; absolutePath: string; bytes: number; exists: boolean }>;
 	/** Spend so far, so the reviewer can weigh a regenerate against its cost. */
 	usageSoFar: StageUsage;
+	/**
+	 * The list this gate lets the reviewer prune, when it declares `select:`.
+	 * Best-effort: an unreadable list still opens the gate, with no items, so it
+	 * can be looked at and rejected.
+	 */
+	selectable?: { file: string; items: SelectableItem[] };
 }
 
 /**

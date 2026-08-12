@@ -449,6 +449,36 @@ second round — because everything downstream is priced per candidate.
   asleep.
 - **A decision is consumed once.** Leaving it in place would re-reject the
   regenerated work forever without ever asking again.
+- **Keeping a subset is a third answer, not a soft rejection.** `select:` names a
+  JSON array the reviewer may cut down; `approve --keep a,b` deletes the rest and
+  proceeds. Rejection regenerates the whole list, which is the wrong tool when
+  most of it is fine. The filter is deterministic on purpose — dropping array
+  entries by id is not judgement, and a model doing it costs a call and can
+  reword the entries it was meant to preserve, the same reasoning that keeps
+  searching and downloading in builtins.
+  - **Order comes from the file, never from the order the ids were typed.** These
+    ids become fan-out item ids and artifact paths, so ordering them by how
+    someone spaced a comma-separated flag would make one decision produce two
+    different reducer prompts. Same class of bug as the fan-out output ordering
+    below, which is why `gates.test.ts` asserts `outputs` and only the *sorted*
+    keys of `items` — `items` is keyed in completion order by design.
+  - **An unknown id fails the whole decision**, listing what was available. The
+    alternative — keep the subset that matched — turns one typo into "delete
+    every candidate I meant to save". Validated at the terminal prompt too, where
+    the fix costs a retyped line instead of an approve-and-resume cycle.
+  - **Reading the list is best-effort; rewriting it is strict.** A malformed
+    `candidates.json` must still open the gate, because the gate is exactly where
+    a bad artifact should be catchable — so `readSelectable` returns nothing and
+    `applyKeep` throws.
+  - **`--keep` with no usable value is an error, not an empty keep list.** Both
+    readings are wrong: one approves everything the reviewer was cutting down,
+    the other deletes all of it. `keepIds()` returns the tri-state and the CLI
+    refuses the empty case.
+  - **`select.from` must be `.json`** — the file later steps re-read. Pointing it
+    at the Markdown shown under `show:` would look like it worked and change
+    nothing.
+  - Pruning is also a depth decision, not only a spend one: the round-one cap is
+    100 papers shared round-robin across every surviving candidate's queries.
 - **Rejection rewinds** to `on_reject` and stores the feedback on that step; the
   retry folds it into the prompt with the previous attempt in
   `<previous_attempt>` tags. The gate then reopens — regenerated work still needs

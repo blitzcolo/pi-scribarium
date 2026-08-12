@@ -13,6 +13,7 @@ import {
 	type BuiltinStepSpec,
 	type ForeachSource,
 	type ForeachStepSpec,
+	type GateSelectSpec,
 	type GateStepSpec,
 	type PipelineSpec,
 	type StepSpec,
@@ -41,6 +42,7 @@ const KNOWN_STEP_KEYS = new Set([
 	"gate",
 	"show",
 	"on_reject",
+	"select",
 ]);
 
 /**
@@ -177,6 +179,7 @@ function readStep(
 				? gateValue.trim()
 				: `Approve ${id}`;
 		const onReject = optionalString(step["on_reject"], ["steps", index, "on_reject"], ctx);
+		const select = readGateSelect(step["select"], index, id, ctx);
 		const gate: GateStepSpec = {
 			kind: "gate",
 			id,
@@ -184,6 +187,7 @@ function readStep(
 			show: readOutputs(step["show"], ["steps", index, "show"], ctx),
 			outputs,
 			...(onReject !== undefined ? { onReject } : {}),
+			...(select !== undefined ? { select } : {}),
 		};
 		return gate;
 	}
@@ -352,6 +356,9 @@ function validateReferences(spec: PipelineSpec, ctx: Context, registry?: AgentRe
 			// quietly matching no items.
 			...(step.kind === "foreach" ? foreachSourceTemplates(step.source) : []),
 			...(step.kind === "gate" ? step.show : []),
+			// Expanded at decision time, so an unresolvable reference here would
+			// surface only once a reviewer had already typed a keep list.
+			...(step.kind === "gate" && step.select !== undefined ? [step.select.from] : []),
 			...step.outputs,
 			...(step.kind === "builtin" ? Object.values(step.with).filter(isString) : []),
 		];
@@ -507,6 +514,53 @@ function readOutputs(raw: unknown, at: Path, ctx: Context): string[] {
 
 function isString(value: unknown): value is string {
 	return typeof value === "string";
+}
+
+/**
+ * Parse a gate's `select:` block.
+ *
+ * Rejected on a non-gate step rather than ignored there: `select` on an agent
+ * step reads as "prune this step's output" and would silently do nothing, which
+ * is the failure this loader exists to make impossible.
+ */
+function readGateSelect(
+	raw: unknown,
+	index: number,
+	id: string,
+	ctx: Context,
+): GateSelectSpec | undefined {
+	if (raw === undefined || raw === null) return undefined;
+	const at: Path = ["steps", index, "select"];
+
+	if (typeof raw !== "object" || Array.isArray(raw)) {
+		throw new PipelineError(
+			`${ctx.at(at)}: "select" must be a mapping with "from" (and optionally "path")`,
+		);
+	}
+
+	const entry = raw as Record<string, unknown>;
+	for (const key of Object.keys(entry)) {
+		if (key !== "from" && key !== "path") {
+			throw new PipelineError(
+				`${ctx.at([...at, key])}: unknown key "${key}" in step "${id}" select. ` +
+					`Available: from, path`,
+			);
+		}
+	}
+
+	const from = requireString(entry["from"], [...at, "from"], ctx);
+	if (!from.toLowerCase().endsWith(".json")) {
+		// The reviewer prunes a list the pipeline re-reads afterwards. Rewriting a
+		// Markdown summary would look like it worked and change nothing downstream.
+		throw new PipelineError(
+			`${ctx.at([...at, "from"])}: "select.from" must be a .json file, got "${from}". ` +
+				`Point it at the machine-readable list the later steps read, not the summary ` +
+				`shown under "show".`,
+		);
+	}
+
+	const jsonPath = optionalString(entry["path"], [...at, "path"], ctx);
+	return { from, ...(jsonPath !== undefined ? { path: jsonPath } : {}) };
 }
 
 type Path = Array<string | number>;

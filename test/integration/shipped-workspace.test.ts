@@ -228,6 +228,17 @@ describe("the shipped explore pipeline", () => {
 		}
 	});
 
+	// The gate and the fan-out must point at the same list, or `--keep` would
+	// prune one file while the judging spent money from another.
+	it("lets the reviewer prune the same list the judging fans out over", () => {
+		const gate = spec.steps.find((step) => step.id === "prune-candidates");
+		if (gate?.kind !== "gate") throw new Error("prune-candidates must be a gate");
+		expect(gate.select).toEqual({
+			from: "explore/${vars.name_slug}/candidates.json",
+			path: "candidates",
+		});
+	});
+
 	// Pruning at the gate means editing candidates.json, so every stage that
 	// enumerates candidates has to re-read it rather than carry an earlier copy.
 	it("drives the judging fan-out from the candidate file itself", () => {

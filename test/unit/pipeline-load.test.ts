@@ -391,3 +391,88 @@ steps:
 		expect(() => parsePipeline(plain, FILE, registry("outliner"))).toThrow(/not in scope/);
 	});
 });
+
+describe("gate select", () => {
+	function gate(body: string): string {
+		return `
+vars:
+  name: demo
+steps:
+  - id: propose
+    agent: outliner
+    input: Propose.
+    output: explore/\${vars.name}/candidates.json
+  - id: prune
+    gate: Review
+    show: explore/\${vars.name}/candidates.md
+${body}
+`;
+	}
+
+	it("parses from and path", () => {
+		const spec = parsePipeline(
+			gate("    select:\n      from: explore/${vars.name}/candidates.json\n      path: candidates"),
+			FILE,
+			registry("outliner"),
+		);
+
+		const step = spec.steps[1];
+		expect(step?.kind).toBe("gate");
+		expect(step?.kind === "gate" ? step.select : undefined).toEqual({
+			from: "explore/${vars.name}/candidates.json",
+			path: "candidates",
+		});
+	});
+
+	it("leaves select absent when the gate does not declare one", () => {
+		const spec = parsePipeline(gate("    on_reject: propose"), FILE, registry("outliner"));
+
+		expect(spec.steps[1]?.kind === "gate" ? spec.steps[1].select : "x").toBeUndefined();
+	});
+
+	// The template is expanded when a decision arrives. An unresolvable reference
+	// would otherwise surface only after a reviewer had typed a keep list.
+	it("validates the from template against the step's scope", () => {
+		expect(() =>
+			parsePipeline(
+				gate("    select:\n      from: explore/${vars.absent}/candidates.json"),
+				FILE,
+				registry("outliner"),
+			),
+		).toThrow(/references \$\{vars\.absent\}/);
+	});
+
+	// Rewriting the Markdown summary would look like it worked and change nothing,
+	// because the later steps read the JSON.
+	it("refuses a from that is not JSON", () => {
+		expect(() =>
+			parsePipeline(
+				gate("    select:\n      from: explore/${vars.name}/candidates.md"),
+				FILE,
+				registry("outliner"),
+			),
+		).toThrow(/must be a \.json file/);
+	});
+
+	it("refuses an unknown key inside select", () => {
+		expect(() =>
+			parsePipeline(
+				gate("    select:\n      from: explore/${vars.name}/c.json\n      id_field: name"),
+				FILE,
+				registry("outliner"),
+			),
+		).toThrow(/unknown key "id_field"/);
+	});
+
+	it("refuses select without from", () => {
+		expect(() =>
+			parsePipeline(gate("    select:\n      path: candidates"), FILE, registry("outliner")),
+		).toThrow(/expected a non-empty string/);
+	});
+
+	it("refuses a scalar select", () => {
+		expect(() =>
+			parsePipeline(gate("    select: candidates.json"), FILE, registry("outliner")),
+		).toThrow(/must be a mapping/);
+	});
+});
