@@ -43,10 +43,22 @@ export const EXIT_AWAITING_GATE = 10;
 export class ProgressReporter {
 	private readonly tty = process.stdout.isTTY === true;
 	private fanoutLine = false;
-	/** When the current fan-out began, for the remaining-time estimate. */
-	private fanoutStartedAt = 0;
+	/**
+	 * When the current fan-out began, for the remaining-time estimate.
+	 *
+	 * `undefined` rather than 0 for "no fan-out running": 0 is a legitimate
+	 * reading from an injected clock, and a sentinel that a real value can equal
+	 * silently disables the estimate for the whole stage.
+	 */
+	private fanoutStartedAt: number | undefined;
+	/** Last time a fan-out heartbeat was written, when not on a terminal. */
+	private lastHeartbeatAt: number | undefined;
 
-	constructor(private readonly quiet: boolean) {}
+	constructor(
+		private readonly quiet: boolean,
+		/** Injectable so the timed behaviour can be tested without spending it. */
+		private readonly now: () => number = Date.now,
+	) {}
 
 	handle(event: PipelineEvent): void {
 		switch (event.type) {
@@ -56,7 +68,10 @@ export class ProgressReporter {
 				break;
 
 			case "fanout_start":
-				this.fanoutStartedAt = Date.now();
+				this.fanoutStartedAt = this.now();
+				// Counted from the header, so the first heartbeat lands one interval
+				// in rather than on the first item to settle.
+				this.lastHeartbeatAt = this.now();
 				process.stdout.write(
 					`      ${event.total} items, ${event.concurrency} at a time\n`,
 				);
@@ -68,9 +83,9 @@ export class ProgressReporter {
 				// is the one place an estimate is both cheap and worth having: the
 				// items are similar and the concurrency is fixed.
 				const eta =
-					this.fanoutStartedAt === 0
+					this.fanoutStartedAt === undefined
 						? ""
-						: remainingLabel(done, event.total, Date.now() - this.fanoutStartedAt);
+						: remainingLabel(done, event.total, this.now() - this.fanoutStartedAt);
 				const line =
 					`      ${done}/${event.total} done` +
 					(event.failed > 0 ? `, ${event.failed} failed` : "") +
@@ -79,7 +94,16 @@ export class ProgressReporter {
 				if (this.tty) {
 					process.stdout.write(`\r\u001b[2K${line}`);
 					this.fanoutLine = true;
-				} else if (event.error !== undefined || done === event.total) {
+				} else if (event.error !== undefined || done === event.total || this.dueForHeartbeat()) {
+					// Without the heartbeat a redirected run printed nothing between the
+					// item count and the final tally. That is the explore pipeline's
+					// normal mode — file gates exist so an unattended batch does not hold
+					// a session open — and an hour of silence in a log is
+					// indistinguishable from a hung process.
+					//
+					// Timed rather than every Nth item: a hundred papers and a dozen want
+					// the same cadence in seconds, not the same count.
+					this.lastHeartbeatAt = this.now();
 					process.stdout.write(`${line}\n`);
 				}
 				// A failure is worth a line of its own even mid-fan-out.
@@ -115,13 +139,30 @@ export class ProgressReporter {
 		}
 	}
 
+	/** True at most once per interval, so a log gets a pulse and not a trace. */
+	private dueForHeartbeat(): boolean {
+		if (this.lastHeartbeatAt === undefined) return true;
+		return this.now() - this.lastHeartbeatAt >= HEARTBEAT_MS;
+	}
+
+	// Deliberately does not clear the fan-out's timing state: it is also called
+	// for an unrelated log line mid-stage, and resetting the start time there
+	// would silently drop the estimate for the rest of the fan-out. `fanout_start`
+	// owns that state.
 	private endFanoutLine(): void {
 		if (!this.fanoutLine) return;
 		process.stdout.write("\n");
 		this.fanoutLine = false;
-		this.fanoutStartedAt = 0;
 	}
 }
+
+/**
+ * How often a non-terminal run reports fan-out progress.
+ *
+ * Long enough that a hundred-item stage does not fill a log, short enough that
+ * a reader tailing it can tell the run apart from a hang within a coffee break.
+ */
+const HEARTBEAT_MS = 20_000;
 
 /** `, ~4m left` — empty until an estimate would be more use than noise. */
 function remainingLabel(done: number, total: number, elapsedMs: number): string {
@@ -149,6 +190,6 @@ export function formatFailures(state: RunState, layout: RunLayout): string {
 }
 
 
-export function makeReporter(quiet: boolean): ProgressReporter {
-	return new ProgressReporter(quiet);
+export function makeReporter(quiet: boolean, now?: () => number): ProgressReporter {
+	return now === undefined ? new ProgressReporter(quiet) : new ProgressReporter(quiet, now);
 }

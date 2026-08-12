@@ -396,6 +396,10 @@ and the report says so rather than letting it read as an open field.
       47/100 done, 2 failed, ~9m12s left  (zhang-2023-cross-modal-attention)
 ```
 
+On a terminal that line is rewritten in place. Redirected to a log — the normal
+case for a run using file gates — it prints roughly every twenty seconds
+instead, so tailing the log distinguishes a working run from a stuck one.
+
 Searching and downloading print one line per query and per paper, each carrying
 a `[12/100]` counter and an estimate once there is enough history to make one
 honest. **Rate limiting is announced rather than absorbed**, because a silent
