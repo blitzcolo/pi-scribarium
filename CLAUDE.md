@@ -417,6 +417,18 @@ appears in it.
   own `sleep`, and vitest's own handles keep the loop alive regardless; the guard therefore asserts
   on `process.getActiveResourcesInfo()`, which lists only resources that *are* keeping the loop
   alive and so cannot see an unref'd timer at all.
+- **Rate limiting is enforced in exactly one place — the fetcher's per-host queues — and nothing
+  above it may be serialized "for safety".** Those queues belong to the fetcher *instance*, not to
+  a call, so they hold however many callers are in flight; construct one per call and the limits
+  stop existing. Both layers above had been serialized on the belief that they were what kept us
+  polite, and both were pure latency: the three indexes are independent hosts awaited in turn inside
+  `search_papers` (`executeSearch` on the builtin path always used `Promise.all`), and the tool then
+  declared `executionMode: "sequential"`, which made a turn's probes wait each other out. Together
+  with the retry storm above, a planning stage needing ~7 s of model time per turn took three
+  minutes. The tool is now `parallel`; note the SDK serializes a whole batch if *any* tool in it
+  declares `sequential`, while `toolExecution` itself defaults to `parallel` and we never set it.
+  The test for this stubs `globalThis.fetch` and uses the un-injected path on purpose — passing a
+  fetcher in bypasses the construction being guarded and would prove nothing.
 - **Non-English queries are refused at the tool boundary**, not merely discouraged in a prompt.
   These indexes hold English literature, so a Chinese query returns nothing — and an empty result
   is indistinguishable from a topic nobody has studied, which is the one wrong answer this pipeline

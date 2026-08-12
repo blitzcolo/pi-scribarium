@@ -85,9 +85,19 @@ export function createSearchPapersTool(options: SearchPapersToolOptions = {}): T
 			"Use search_papers to check a query's yield before committing to it, not to gather evidence: the pipeline's own search step builds the corpus.",
 		],
 		parameters: PARAMETERS,
-		// Sequential so parallel calls cannot slip past the per-host rate limits
-		// the polite fetcher enforces one request at a time.
-		executionMode: "sequential",
+		// Politeness is enforced by the fetcher, which serializes and spaces per
+		// host — not by running one tool call at a time. The queues belong to the
+		// single fetcher built above and closed over here, so every concurrent call
+		// shares them and no host sees a shorter interval however many calls are in
+		// flight. Serializing here as well protected nothing and tripled the wall
+		// clock: the planner probes three or so queries per turn, and each waited
+		// out the one before it.
+		//
+		// The premise is that one fetcher instance serves every call. Moving its
+		// construction into `execute` would give each call private queues and
+		// concurrency really would slip past the rate limits — which is what the
+		// spacing test below pins down.
+		executionMode: "parallel",
 		execute: async (_toolCallId, params) => {
 			const query = String(params.query ?? "").trim();
 			if (query === "") {

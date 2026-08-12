@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { normalizeTools } from "../../src/agents/parse.js";
 import { buildCustomTools } from "../../src/runtime/custom-tools.js";
@@ -160,12 +160,18 @@ describe("search_papers tool", () => {
 		expect(text).toContain("20 result(s)");
 	});
 
-	it("writes no files and is declared sequential", () => {
+	it("writes no files and runs calls in parallel", () => {
 		const tool = createSearchPapersTool({ fetcher: scriptedFetcher([]).fetch });
 
-		// Sequential so parallel tool calls cannot slip past the per-host rate
-		// limits the polite fetcher enforces one request at a time.
-		expect(tool.executionMode).toBe("sequential");
+		// This was "sequential", on the premise that concurrent calls would slip
+		// past the per-host rate limits. They cannot: the limits live in the shared
+		// fetcher's per-host queues, which do not care how many callers there are,
+		// and the spacing that actually matters is asserted below rather than
+		// bought by making the planner wait out each probe in turn. One session-
+		// level gate remains above this one — the SDK serializes a whole batch if
+		// any tool in it declares "sequential" — but `toolExecution` itself
+		// defaults to "parallel" and we never set it.
+		expect(tool.executionMode).toBe("parallel");
 		expect(tool.name).toBe("search_papers");
 		expect(tool.promptSnippet).toContain("English");
 	});
@@ -235,5 +241,51 @@ describe("backend concurrency", () => {
 		// Serialized this reads start/end/start/end/start/end. All three must be in
 		// flight before any of them lands.
 		expect(order.slice(0, 3).filter((entry) => entry.startsWith("start"))).toHaveLength(3);
+	});
+});
+
+/**
+ * The tool runs `executionMode: "parallel"`, so two probes from one turn are in
+ * flight together. That is only safe because per-host spacing lives in the
+ * fetcher and the fetcher is built once per tool and shared by every call. Build
+ * it inside `execute` instead and each call gets private queues, at which point
+ * concurrency really does slip past the published rate limits — and arXiv
+ * answers a client that does that with a block, which is not a theory: it cost a
+ * live run 45 minutes.
+ *
+ * Deliberately exercises the *un-injected* path by stubbing `globalThis.fetch`,
+ * the same trick `search-builtins.test.ts` uses. Passing a fetcher in would prove
+ * nothing about that wiring: it bypasses the construction being guarded. Uses
+ * OpenAlex alone so the assertion costs its 250ms floor rather than arXiv's 3.1s.
+ */
+describe("concurrent calls stay polite", () => {
+	const realFetch = globalThis.fetch;
+	afterEach(() => {
+		globalThis.fetch = realFetch;
+	});
+
+	it("spaces same-host requests when two probes overlap", async () => {
+		const hits: number[] = [];
+		globalThis.fetch = (async (input: string | URL | Request) => {
+			hits.push(Date.now());
+			expect(String(input)).toContain("api.openalex.org");
+			return new Response(EMPTY_OPENALEX);
+		}) as typeof globalThis.fetch;
+
+		const tool = createSearchPapersTool();
+		const probeOnce = (query: string): Promise<unknown> =>
+			tool.execute(
+				"call",
+				{ query, backend: "openalex" },
+				undefined,
+				undefined,
+				undefined as never,
+			);
+		await Promise.all([probeOnce("infrared fusion"), probeOnce("visible spectrum fusion")]);
+
+		expect(hits).toHaveLength(2);
+		// OpenAlex's floor is 250ms. Private queues would put both requests out at
+		// once; the tolerance is for timer coarseness, not for skipping the wait.
+		expect((hits[1] as number) - (hits[0] as number)).toBeGreaterThanOrEqual(240);
 	});
 });
