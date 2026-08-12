@@ -185,3 +185,62 @@ describe("runStage against a scripted provider", () => {
 		expect(Buffer.byteLength(result.text, "utf8")).toBeLessThanOrEqual(1024);
 	});
 });
+
+/**
+ * A stage that has stopped rather than slowed.
+ *
+ * There was no guard at all: no shipped agent sets `timeout_ms`, and the
+ * deadline timer is only created when one does, so the mechanism was dead code
+ * in practice. A live run's planning stage deadlocked with zero open sockets and
+ * zero CPU and sat there — no error, no exit, no output — until it was noticed by
+ * hand nearly an hour later.
+ *
+ * The watchdog measures silence rather than duration on purpose. A slow stage
+ * keeps emitting deltas, tool starts and turn ends; only a stopped one goes
+ * quiet. A wall-clock cap cannot tell them apart, and a planner with a sixty-turn
+ * budget can legitimately run for an hour.
+ */
+describe("the stall watchdog", () => {
+	it("fails a stage that stops emitting, instead of waiting forever", async () => {
+		const scripted = await createScriptedRuntime(agentDir, () => ({ hang: true }));
+
+		const result = await runStage({
+			agent: agent(),
+			prompt: "Do the task.",
+			cwd: workspace,
+			agentDir,
+			modelRuntime: scripted.runtime,
+			stallTimeoutMs: 300,
+		});
+
+		expect(result.status).toBe("failed");
+		expect(result.error?.code).toBe("TIMEOUT");
+		// Says which failure this is. abort() sets state.errorMessage itself, so
+		// without ranking this above the agent-error branch a hung stage is reported
+		// as a generic model failure — hiding the one fact worth acting on.
+		expect(result.error?.message).toContain("no output");
+		expect(result.error?.message).toContain("hung");
+	});
+
+	it("leaves a stage that keeps working alone", async () => {
+		// Four turns, each well inside the window but adding up past it: a duration
+		// cap short enough to catch a hang would kill exactly this.
+		const scripted = await createScriptedRuntime(agentDir, (ctx) =>
+			ctx.turn < 4
+				? { toolCalls: [{ name: "write", args: { path: `note-${ctx.turn}.md`, content: "x" } }] }
+				: { text: "Done." },
+		);
+
+		const result = await runStage({
+			agent: agent(),
+			prompt: "Do the task.",
+			cwd: workspace,
+			agentDir,
+			modelRuntime: scripted.runtime,
+			stallTimeoutMs: 2_000,
+		});
+
+		expect(result.status).toBe("completed");
+		expect(result.error).toBeUndefined();
+	});
+});

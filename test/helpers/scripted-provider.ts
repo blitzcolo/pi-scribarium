@@ -40,6 +40,12 @@ export interface ScriptStep {
 	error?: string;
 	/** Override reported token usage for this turn. */
 	usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number };
+	/**
+	 * Never answer. The stream opens and then nothing further arrives — the shape
+	 * a deadlock takes from the agent loop's side, and the only way to exercise the
+	 * stall watchdog, since a stage that fails or is slow both still emit.
+	 */
+	hang?: boolean;
 }
 
 export interface ScriptContext {
@@ -157,6 +163,11 @@ function runScript(
 		} as unknown as AssistantMessage;
 
 		stream.push({ type: "start", partial: output });
+
+		if (step.hang === true) {
+			// Deliberately never settles and never ends the stream.
+			await new Promise<never>(() => {});
+		}
 
 		if (step.error !== undefined) {
 			// A provider failure after acceptance: prompt() still resolves, and the

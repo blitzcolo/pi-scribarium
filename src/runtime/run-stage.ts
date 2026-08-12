@@ -17,6 +17,33 @@ import { TurnBudget } from "./turn-budget.js";
 export const DEFAULT_OUTPUT_LIMIT_BYTES = 50 * 1024;
 
 /**
+ * How long a stage may emit nothing at all before it is treated as hung.
+ *
+ * Silence, not duration: a stage that is merely slow keeps emitting deltas, tool
+ * starts and turn ends, while one that has deadlocked emits nothing. A plain
+ * wall-clock cap cannot separate the two — a planner with a sixty-turn budget can
+ * legitimately run for an hour, so any cap short enough to catch a hang would
+ * kill real work.
+ *
+ * Generous because a single tool call can legitimately be slow: the searching
+ * tool serialises per host and absorbs rate-limit backoffs, so several minutes
+ * between events is normal under a 429 storm. Nothing here should ever fire on a
+ * working run; it exists so that one that has stopped fails and says so instead
+ * of sitting at a prompt forever. `timeout_ms` in agent frontmatter is the
+ * separate, per-agent cap on total duration, and no shipped agent sets one.
+ */
+const STALL_TIMEOUT_MS = 20 * 60_000;
+
+/**
+ * How long a stalled stage is given to shut down cleanly before it is abandoned.
+ *
+ * Short, because by this point the stage has already been silent for the whole
+ * stall window and `abort()` has been asked for; anything still pending is
+ * pending on something that is not going to finish.
+ */
+const ABANDON_GRACE_MS = 30_000;
+
+/**
  * Retry policy, tuned for sustained rate limiting rather than a dropped packet.
  *
  * A fan-out over a large corpus can hold a provider near its per-minute token
@@ -106,6 +133,11 @@ export interface RunStageOptions {
 	 * the network however this is set.
 	 */
 	customToolContext?: CustomToolContext;
+	/**
+	 * How long the stage may emit nothing before it is treated as hung.
+	 * Defaults to `STALL_TIMEOUT_MS`; exists so tests need not wait it out.
+	 */
+	stallTimeoutMs?: number;
 	/** Cancels the stage; surfaces as an `aborted` result. */
 	signal?: AbortSignal;
 	onEvent?: (event: StageEvent) => void;
@@ -231,8 +263,46 @@ export async function runStage(options: RunStageOptions): Promise<RunStageResult
 	let retries = 0;
 	let compactions = 0;
 	let timedOut = false;
+	let stalled = false;
 	let externallyAborted = false;
 	let cancelled = false;
+
+	/**
+	 * Watchdog for a stage that has stopped rather than slowed.
+	 *
+	 * Deliberately **not** `unref`'d, unlike the deadline timer below. That one
+	 * only needs to fire while a live stage is being kept alive by its own work;
+	 * this one exists precisely for the case where nothing else is happening, and
+	 * an unref'd timer would let the process exit out from under the stage instead
+	 * of reporting it — the same trap that cost a run its whole search layer.
+	 */
+	let stallTimer: ReturnType<typeof setTimeout> | undefined;
+	const stallMs = options.stallTimeoutMs ?? STALL_TIMEOUT_MS;
+	function armStall(): void {
+		if (cancelled) return;
+		if (stallTimer !== undefined) clearTimeout(stallTimer);
+		stallTimer = setTimeout(() => {
+			if (cancelled) return;
+			stalled = true;
+			cancel();
+			// abort() is cooperative: it asks the loop to stop and resolves once the
+			// session is idle. A stage wedged inside a tool call it cannot interrupt
+			// — our own search tool takes no signal — never becomes idle, so waiting
+			// on it is waiting forever, which is the exact failure this watchdog
+			// exists to end. Ask politely, then stop waiting.
+			setTimeout(abandon, Math.min(ABANDON_GRACE_MS, stallMs));
+		}, stallMs);
+	}
+
+	/** Resolves when a stalled stage is given up on rather than waited out. */
+	let abandon!: () => void;
+	let abandoned = false;
+	const givenUp = new Promise<void>((resolve) => {
+		abandon = () => {
+			abandoned = true;
+			resolve();
+		};
+	});
 
 	/** Abort at most once, from whichever source fires first. */
 	const cancel = (): void => {
@@ -244,6 +314,11 @@ export async function runStage(options: RunStageOptions): Promise<RunStageResult
 	};
 
 	const unsubscribe = session.subscribe((event) => {
+		// Any event at all proves the session is still moving, which is the whole
+		// signal — deliberately outside the switch, so an event type we do not
+		// translate still counts as life.
+		armStall();
+
 		switch (event.type) {
 			case "turn_end": {
 				const action = budget.onTurnEnd();
@@ -283,6 +358,13 @@ export async function runStage(options: RunStageOptions): Promise<RunStageResult
 	};
 	options.signal?.addEventListener("abort", onExternalAbort, { once: true });
 
+	// Re-armed by every event below, so it measures silence rather than duration.
+	// A stage that is merely slow keeps emitting — deltas, tool starts, turn ends —
+	// and a wall-clock cap could not tell it from one that has stopped: a planner
+	// with a sixty-turn budget can legitimately run for an hour, so any cap short
+	// enough to catch a hang is short enough to kill real work.
+	armStall();
+
 	const timer =
 		agent.timeoutMs !== undefined
 			? setTimeout(() => {
@@ -305,8 +387,9 @@ export async function runStage(options: RunStageOptions): Promise<RunStageResult
 	let sessionFile: string | undefined;
 
 	try {
-		// Resolves only after the whole accepted run settles, including retries.
-		await session.prompt(options.prompt);
+		// Resolves only after the whole accepted run settles, including retries —
+		// unless it never settles at all, which is what `givenUp` is for.
+		await Promise.race([session.prompt(options.prompt), givenUp]);
 	} catch (error) {
 		thrown = error instanceof Error ? error.message : String(error);
 	} finally {
@@ -314,7 +397,11 @@ export async function runStage(options: RunStageOptions): Promise<RunStageResult
 		// already in flight, and a timer still armed across that window would fire
 		// on a stage that has in fact already finished.
 		if (timer !== undefined) clearTimeout(timer);
-		await session.waitForIdle().catch(() => {});
+		if (stallTimer !== undefined) clearTimeout(stallTimer);
+		// Skipped for a stage we have given up on: waitForIdle() is the very call
+		// that would never return. The transcript loses whatever was mid-write,
+		// which is the price of the stage terminating at all.
+		if (!abandoned) await session.waitForIdle().catch(() => {});
 
 		// All of this belongs in the finally, not after it. A throw while reading
 		// stats off an aborted session would otherwise skip the teardown *and*
@@ -350,7 +437,15 @@ export async function runStage(options: RunStageOptions): Promise<RunStageResult
 	);
 
 	return {
-		...classify({ budget, timedOut, externallyAborted, stateError, thrown }),
+		...classify({
+			budget,
+			timedOut,
+			stalled,
+			stallMs: options.stallTimeoutMs ?? STALL_TIMEOUT_MS,
+			externallyAborted,
+			stateError,
+			thrown,
+		}),
 		text,
 		truncated,
 		turns: budget.turns,
@@ -384,11 +479,13 @@ export async function runStage(options: RunStageOptions): Promise<RunStageResult
 function classify(input: {
 	budget: TurnBudget;
 	timedOut: boolean;
+	stalled: boolean;
+	stallMs: number;
 	externallyAborted: boolean;
 	stateError: string | undefined;
 	thrown: string | undefined;
 }): { status: StageStatus; error?: { code: StageErrorCode; message: string } } {
-	const { budget, timedOut, externallyAborted, stateError, thrown } = input;
+	const { budget, timedOut, stalled, externallyAborted, stateError, thrown } = input;
 
 	if (budget.exceeded) {
 		return {
@@ -404,6 +501,20 @@ function classify(input: {
 	if (timedOut) {
 		return { status: "failed", error: { code: "TIMEOUT", message: "stage timed out" } };
 	}
+	// Ranked with the deadline rather than with agent errors, and for the same
+	// reason: abort() sets state.errorMessage itself, so reading the error first
+	// would report a hung stage as a generic model failure and hide the one fact
+	// worth acting on.
+	if (stalled) {
+		return {
+			status: "failed",
+			error: {
+				code: "TIMEOUT",
+				message:
+					`stage produced no output for ${formatStall(input.stallMs)} and was treated as hung`,
+			},
+		};
+	}
 	if (externallyAborted) {
 		return { status: "aborted", error: { code: "EXTERNAL_ABORT", message: "cancelled" } };
 	}
@@ -412,4 +523,11 @@ function classify(input: {
 		return { status: "failed", error: { code: "AGENT_ERROR", message } };
 	}
 	return { status: "completed" };
+}
+
+/** "20 minutes" reads better than 1200000ms in a run report. */
+function formatStall(ms: number): string {
+	const minutes = ms / 60_000;
+	if (minutes >= 1) return `${Math.round(minutes)} minute${Math.round(minutes) === 1 ? "" : "s"}`;
+	return `${Math.round(ms / 1000)}s`;
 }
