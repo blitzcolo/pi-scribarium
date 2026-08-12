@@ -63,17 +63,31 @@ function buildUrl(spec: QuerySpec, limit: number, baseUrl: string): string | und
 	}
 
 	if (spec.query === undefined || spec.query.trim() === "") return undefined;
-	const search = `all:${quote(spec.query)}`;
+	const search = `all:${terms(spec.query)}`;
 	return (
 		`${baseUrl}?search_query=${encodeURIComponent(search)}` +
 		`&start=0&max_results=${capped}&sortBy=relevance`
 	);
 }
 
-/** Multi-word queries are phrase-quoted; arXiv otherwise ORs the terms. */
-function quote(query: string): string {
-	const cleaned = query.replaceAll('"', " ").trim();
-	return cleaned.includes(" ") ? `"${cleaned}"` : cleaned;
+/**
+ * Terms are handed over bare, and relevance ordering does the rest.
+ *
+ * They used to be phrase-quoted, on the correct observation that arXiv ORs bare
+ * terms. The conclusion was wrong: a planner writes descriptive six-to-eight word
+ * queries — "weakly aligned RGB thermal pedestrian detection feature alignment" —
+ * and no paper contains that as a literal phrase, so the quoted form matched
+ * nothing. Not rarely: `totalResults=0` for every query in a real run, which is
+ * how a corpus for infrared/visible fusion ended up with no arXiv papers in it at
+ * all, and therefore consisted of publisher-hosted articles whose PDFs mostly
+ * cannot be downloaded. ANDing the terms fails the same way for the same reason.
+ *
+ * The OR is harmless because `sortBy=relevance` ranks the union and we keep only
+ * the first `max_results` of it: the same three queries that returned nothing
+ * return SimpleFusion, CrossFuse and SGDFuse once the quotes come off.
+ */
+function terms(query: string): string {
+	return query.replaceAll('"', " ").trim();
 }
 
 function entries(xml: string): string[] {

@@ -69,19 +69,20 @@ export async function executeSearch(options: ExecuteSearchOptions): Promise<Exec
 			}),
 		]);
 
-		const found: PaperRecord[] = [];
+		const answered: PaperRecord[][] = [];
 		for (const result of results) {
 			if (result.error !== undefined) {
 				backendFailures.set(result.backend, (backendFailures.get(result.backend) ?? 0) + 1);
 				continue;
 			}
-			found.push(...result.papers);
+			answered.push(result.papers);
 		}
 
-		if (found.length === 0 && every(results, (r) => r.error !== undefined)) {
+		const foundCount = answered.reduce((total, list) => total + list.length, 0);
+		if (foundCount === 0 && every(results, (r) => r.error !== undefined)) {
 			warnings.push(`No backend answered for ${label}.`);
 		}
-		perQuery[index] = found;
+		perQuery[index] = interleaveBackends(answered);
 	}
 
 	for (const [backend, count] of [...backendFailures].sort((a, b) => a[0].localeCompare(b[0]))) {
@@ -95,7 +96,7 @@ export async function executeSearch(options: ExecuteSearchOptions): Promise<Exec
 	// Merge within each query first so the round-robin below distributes distinct
 	// papers, then merge globally so a paper found by two queries is one record
 	// carrying both.
-	const ranked = rankAcrossQueries(perQuery.map((papers) => rankOne(mergeRecords(papers))));
+	const ranked = rankAcrossQueries(perQuery.map((papers) => mergeRecords(papers)));
 
 	const kept: PaperRecord[] = [];
 	let dropped = 0;
@@ -133,8 +134,34 @@ function url(
 }
 
 /** Most cited first within a query; ties keep backend order, which is fixed. */
-function rankOne(papers: readonly PaperRecord[]): PaperRecord[] {
-	return [...papers].sort((a, b) => (b.citationCount ?? 0) - (a.citationCount ?? 0));
+/**
+ * Interleave the backends' own relevance orders, most relevant first.
+ *
+ * Each index ranks its results by how well they match the query, and that
+ * ranking is the only relevance signal in this system. Sorting the union by
+ * citation count threw it away and put fame in its place: for the query "noise
+ * robust visible infrared image fusion fixed pattern noise", OpenAlex's loose
+ * match on the seven-year WMAP cosmology survey — 8874 citations — outranked
+ * every paper actually about infrared fusion, and the round-robin across queries
+ * then took it first. A real corpus for infrared/visible fusion came back led by
+ * WMAP, acute stroke guidelines and attosecond physics.
+ *
+ * Citations survive only as a tiebreak between backends at the same rank. They
+ * say nothing about whether a paper is on topic, and this step builds a corpus;
+ * judging impact belongs to the stage that reads the papers.
+ */
+function interleaveBackends(lists: readonly PaperRecord[][]): PaperRecord[] {
+	const out: PaperRecord[] = [];
+	const longest = lists.reduce((max, list) => Math.max(max, list.length), 0);
+	for (let rank = 0; rank < longest; rank += 1) {
+		const atRank = lists.flatMap((list) => {
+			const paper = list[rank];
+			return paper === undefined ? [] : [paper];
+		});
+		atRank.sort((a, b) => (b.citationCount ?? 0) - (a.citationCount ?? 0));
+		out.push(...atRank);
+	}
+	return out;
 }
 
 /**

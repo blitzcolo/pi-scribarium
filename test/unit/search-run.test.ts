@@ -27,6 +27,41 @@ function query(point: string, text: string): QuerySpec {
 }
 
 describe("executeSearch", () => {
+	/**
+	 * A backend returns its hits in its own relevance order, and that order is the
+	 * only relevance signal this system has. It used to be discarded and replaced
+	 * with a citation-count sort, which is a fame signal: in a real run the query
+	 * "noise robust visible infrared image fusion fixed pattern noise" put the
+	 * seven-year WMAP cosmology survey — 8874 citations, matched loosely — ahead of
+	 * every paper about infrared fusion, and the corpus came back led by WMAP,
+	 * acute stroke guidelines and attosecond physics.
+	 */
+	it("keeps the backend's relevance order instead of promoting the famous", async () => {
+		const { fetch } = scriptedFetcher([
+			{ match: "export.arxiv.org", body: EMPTY_ARXIV },
+			{
+				match: "api.semanticscholar.org",
+				body: s2([
+					["On Topic But Obscure", 3],
+					["Famous And Barely Related", 9999],
+				]),
+			},
+			{ match: "api.openalex.org", body: EMPTY_OPENALEX },
+		]);
+
+		const result = await executeSearch({
+			queries: [query("ip-1", "infrared fusion")],
+			fetcher: fetch,
+			perQueryLimit: 10,
+			maxTotal: 50,
+		});
+
+		expect(result.papers.map((paper: PaperRecord) => paper.title)).toEqual([
+			"On Topic But Obscure",
+			"Famous And Barely Related",
+		]);
+	});
+
 	it("merges across backends and assigns ids once, after dedupe", async () => {
 		const { fetch } = scriptedFetcher([
 			{ match: "export.arxiv.org", body: EMPTY_ARXIV },
@@ -57,7 +92,14 @@ describe("executeSearch", () => {
 
 		// The same DOI from two backends is one paper, one download, one card.
 		expect(result.papers).toHaveLength(1);
-		expect(result.papers[0]?.backends).toEqual(["semanticscholar", "openalex"]);
+		// Sorted: `backends` records which indexes found the paper, and nothing
+		// reads an order into it. It used to fall out of the order the backends
+		// were concatenated in; now that equally-ranked hits are ordered between
+		// themselves, whichever of the two merges first is an artifact.
+		expect([...(result.papers[0]?.backends ?? [])].sort()).toEqual([
+			"openalex",
+			"semanticscholar",
+		]);
 		expect(result.papers[0]?.id).toBe("lovelace-2020-alpha-paper");
 	});
 

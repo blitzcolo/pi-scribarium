@@ -15,6 +15,34 @@ const read = (name: string) => fs.readFileSync(path.join(fixtures, name), "utf-8
 const QUERY: QuerySpec = { kind: "query", point: "ip-1", query: "infrared visible fusion" };
 
 describe("arXiv adapter", () => {
+	/**
+	 * The terms go over bare and `sortBy=relevance` ranks the union.
+	 *
+	 * They were once phrase-quoted, on the correct observation that arXiv ORs bare
+	 * terms — but a planner writes six-to-eight word descriptive queries, and no
+	 * paper contains one of those as a literal phrase. Every query in a real run
+	 * came back `totalResults=0`, so a corpus about infrared/visible fusion
+	 * contained no arXiv papers at all and consisted instead of publisher-hosted
+	 * articles whose PDFs mostly refuse to download. ANDing the terms fails
+	 * identically. Do not put the quotes back.
+	 */
+	it("does not phrase-quote a multi-word query", async () => {
+		const { fetch, requests } = scriptedFetcher([
+			{ match: "export.arxiv.org", body: read("arxiv-query.atom") },
+		]);
+
+		await searchArxiv(
+			{ kind: "query", point: "ip-1", query: "weakly aligned RGB thermal pedestrian detection" },
+			10,
+			{ fetcher: fetch },
+		);
+
+		const sent = decodeURIComponent(requests[0] ?? "");
+		expect(sent).toContain("all:weakly aligned RGB thermal pedestrian detection");
+		expect(sent).not.toContain('"');
+		expect(sent).toContain("sortBy=relevance");
+	});
+
 	it("extracts entries, decodes entities, and strips the version from the id", async () => {
 		const { fetch, requests } = scriptedFetcher([
 			{ match: "export.arxiv.org", body: read("arxiv-query.atom") },
