@@ -3,7 +3,7 @@ import { Type } from "typebox";
 
 import { searchArxiv } from "../../search/arxiv.js";
 import { mergeRecords } from "../../search/dedupe.js";
-import { createPoliteFetcher, type Fetcher } from "../../search/http.js";
+import { createPoliteFetcher, type Fetcher, type FetchNotice } from "../../search/http.js";
 import { searchOpenAlex } from "../../search/openalex.js";
 import { searchSemanticScholar } from "../../search/semantic-scholar.js";
 import type { BackendResult, PaperRecord, QuerySpec } from "../../search/types.js";
@@ -64,10 +64,17 @@ const PARAMETERS = Type.Object({
 
 export interface SearchPapersToolOptions {
 	fetcher?: Fetcher;
+	/** Only consulted for a fetcher this factory builds; an injected one reports
+	 * through whatever hook its own caller gave it. */
+	onNotice?: (notice: FetchNotice) => void;
 }
 
 export function createSearchPapersTool(options: SearchPapersToolOptions = {}): ToolDefinition {
-	const fetcher = options.fetcher ?? createPoliteFetcher();
+	const fetcher =
+		options.fetcher ??
+		createPoliteFetcher({
+			...(options.onNotice !== undefined ? { onNotice: options.onNotice } : {}),
+		});
 
 	return defineTool({
 		name: "search_papers",

@@ -21,7 +21,7 @@ import { applyKeep, KeepError, readSelectable } from "../gates/keep.js";
 import { archiveAttempt, buildRegeneratePrompt } from "../gates/regenerate.js";
 import type { GateHandler } from "../gates/types.js";
 import { redactSecrets } from "../util/safety.js";
-import { runBuiltin } from "./builtins.js";
+import { describeNotice, runBuiltin } from "./builtins.js";
 import { resolveItems } from "./items.js";
 import { mapPool, MAX_CONCURRENCY } from "./pool.js";
 import { interpolate, type TemplateScope } from "./template.js";
@@ -633,7 +633,22 @@ async function runOneStage(
 		sessionDir: layout.sessionsDir,
 		// Only reaches an agent whose `tools:` grants a custom tool; every shipped
 		// agent but the query planner grants none and stays offline regardless.
-		...(options.fetcher !== undefined ? { customToolContext: { fetcher: options.fetcher } } : {}),
+		// Passed unconditionally, unlike before: gating the whole context on an
+		// injected fetcher meant that in production — where there is none and the
+		// tool builds its own — the notice hook was never installed. The one stage
+		// that reaches the network was therefore the one that said nothing while it
+		// was being rate-limited, which is gotcha #21 at the layer where it hurts
+		// most: minutes of absorbing 429s look exactly like a stage that has stopped.
+		customToolContext: {
+			...(options.fetcher !== undefined ? { fetcher: options.fetcher } : {}),
+			onNotice: (notice) =>
+				options.onEvent?.({
+					type: "stage",
+					stepId: step.id,
+					event: { type: "warn", message: describeNotice(notice).trim() },
+					...(item !== undefined ? { itemId: item.id } : {}),
+				}),
+		},
 		...(modelRef !== undefined ? { defaultModelRef: modelRef } : {}),
 		...(options.defaultThinking !== undefined ? { defaultThinking: options.defaultThinking } : {}),
 		...(stageSignal !== undefined ? { signal: stageSignal } : {}),

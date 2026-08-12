@@ -340,7 +340,7 @@ function fetcherFor(ctx: BuiltinContext): Fetcher {
 	return createPoliteFetcher({ onNotice: (notice) => ctx.onProgress?.(describeNotice(notice)) });
 }
 
-function describeNotice(notice: FetchNotice): string {
+export function describeNotice(notice: FetchNotice): string {
 	const wait = formatDuration(notice.waitMs);
 	const host = hostOf(notice.url);
 	return notice.kind === "rate-limited"
