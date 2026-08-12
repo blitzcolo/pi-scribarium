@@ -284,6 +284,21 @@ describe("what is sent to whom", () => {
 		expect(notices).toEqual([]);
 	});
 
+	it("still spaces two requests to one host apart", async () => {
+		const polite = createPoliteFetcher({
+			fetch: async () => new Response("ok"),
+			intervals: new Map([["example.org", 80]]),
+		});
+
+		const started = Date.now();
+		await polite("https://example.org/a");
+		await polite("https://example.org/b");
+
+		// The wait moved from after one request to before the next; it must not have
+		// gone missing in the move.
+		expect(Date.now() - started).toBeGreaterThanOrEqual(70);
+	});
+
 	it("serializes requests to one host", async () => {
 		const order: string[] = [];
 		const polite = createPoliteFetcher({
@@ -305,5 +320,63 @@ describe("what is sent to whom", () => {
 			"start https://example.org/b",
 			"end https://example.org/b",
 		]);
+	});
+});
+
+/**
+ * Both waits in this file are awaited by somebody, so a timer that does not hold
+ * the event loop open strands whoever is awaiting it.
+ *
+ * That is not a slow path or a late resolution. With no socket in flight —
+ * exactly the state between two of an agent's tool calls — node finds nothing
+ * left to do, drains the loop, and kills the run with "Detected unsettled
+ * top-level await" and exit 13, in the middle of a stage that was working. It
+ * escaped the whole suite because every other test here sets an interval of 0 or
+ * injects its own `sleep`, and vitest's own handles keep the loop alive anyway.
+ *
+ * `getActiveResourcesInfo` reports only resources that are keeping the loop
+ * alive, so an `unref`'d timer is invisible to it — which is precisely the
+ * distinction being asserted.
+ */
+describe("waits hold the event loop open", () => {
+	const activeTimeouts = (): number =>
+		process.getActiveResourcesInfo().filter((resource) => resource === "Timeout").length;
+
+	/** Drains the microtask queue, so a pending `await` has reached its timer. */
+	const settle = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
+
+	it("while spacing a second request to one host", async () => {
+		const polite = createPoliteFetcher({
+			fetch: async () => new Response("ok"),
+			intervals: new Map([["example.org", 60]]),
+		});
+		await polite("https://example.org/a");
+
+		const before = activeTimeouts();
+		const second = polite("https://example.org/b");
+		await settle();
+
+		expect(activeTimeouts()).toBeGreaterThan(before);
+		await second;
+	});
+
+	it("while backing off after a 429", async () => {
+		let attempt = 0;
+		const polite = createPoliteFetcher({
+			intervals: new Map([["example.org", 0]]),
+			fetch: async () => {
+				attempt += 1;
+				return attempt === 1
+					? new Response("slow down", { status: 429, headers: { "retry-after": "0.06" } })
+					: new Response("ok");
+			},
+		});
+
+		const before = activeTimeouts();
+		const pending = polite("https://example.org/a");
+		await settle();
+
+		expect(activeTimeouts()).toBeGreaterThan(before);
+		expect((await pending).status).toBe(200);
 	});
 });

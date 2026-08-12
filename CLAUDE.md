@@ -403,6 +403,20 @@ appears in it.
   reactions. Note the notice hook only exists on a fetcher the builtin constructs itself: an
   injected one (tests, or a caller with its own transport) reports nothing, which is why
   `search-builtins.test.ts` covers the un-injected path by stubbing `globalThis.fetch`.
+- **A timer somebody is awaiting must never be `unref`'d.** The per-host pacing delay used to be
+  armed as an unref'd `setTimeout` *after* each request, so a finished run would not sit idle for up
+  to 3.1 s waiting out an interval nobody needed. But the next request to that host awaited exactly
+  that timer, and an unref'd timer does not hold the event loop open — so between two of an agent's
+  tool calls, with no socket in flight, node found nothing left to do, drained the loop, and killed
+  the run mid-stage with *"Detected unsettled top-level await"* and exit 13. Not a hang: a silent
+  kill of a working run. The wait now happens on the way *into* a request rather than on the way
+  out, so it exists only while somebody needs it, stays ref'd, and leaves no trailing timer to
+  suppress. `defaultSleep` is the same rule. The stage-timeout watchdog in `run-stage.ts` is the
+  opposite case and is correctly unref'd — nothing awaits it, and it must not keep a finished stage
+  alive. The whole suite missed this because every HTTP test sets an interval of 0 or injects its
+  own `sleep`, and vitest's own handles keep the loop alive regardless; the guard therefore asserts
+  on `process.getActiveResourcesInfo()`, which lists only resources that *are* keeping the loop
+  alive and so cannot see an unref'd timer at all.
 - **Non-English queries are refused at the tool boundary**, not merely discouraged in a prompt.
   These indexes hold English literature, so a Chinese query returns nothing — and an empty result
   is indistinguishable from a topic nobody has studied, which is the one wrong answer this pipeline

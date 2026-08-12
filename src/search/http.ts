@@ -116,6 +116,8 @@ export function createPoliteFetcher(options: PoliteFetcherOptions = {}): Fetcher
 
 	/** Tail of the request chain per host; awaiting it is waiting your turn. */
 	const queues = new Map<string, Promise<void>>();
+	/** Earliest wall-clock time the next request to a host may start. */
+	const readyAt = new Map<string, number>();
 
 	return async function politeFetch(url: string, init?: RequestInit): Promise<Response> {
 		const host = hostOf(url);
@@ -132,12 +134,28 @@ export function createPoliteFetcher(options: PoliteFetcherOptions = {}): Fetcher
 		);
 		await previous;
 
+		// Space this request from the end of the previous one — back-to-back small
+		// requests are what a host notices — but wait for it *here*, on the way in,
+		// rather than arming a timer on the way out.
+		//
+		// The other arrangement deadlocked the process. Releasing the next caller
+		// from a `setTimeout` meant that timer had to be unref'd, or a run would sit
+		// idle for the interval after its final request; but unref'd it no longer
+		// held the event loop open, and between two tool calls there is no socket in
+		// flight to hold it either. Node found nothing left to do while the second
+		// request was still awaiting its turn, drained the loop, and killed the run
+		// mid-stage with "Detected unsettled top-level await" and exit 13. Waiting on
+		// entry means the delay exists only while somebody needs it, so it can stay
+		// ref'd and there is no trailing timer to suppress.
+		const earliest = readyAt.get(host);
+		const remaining = earliest === undefined ? 0 : earliest - Date.now();
+		if (remaining > 0) await sleep(remaining);
+
 		try {
 			return await attempt(url, host, init);
 		} finally {
-			// Space the *next* request from the end of this one rather than sleeping
-			// before each: back-to-back small requests are what a host notices.
-			setTimeout(release, interval).unref?.();
+			readyAt.set(host, Date.now() + interval);
+			release();
 		}
 	};
 
@@ -258,9 +276,17 @@ function hostOf(url: string): string {
 	}
 }
 
+/**
+ * Deliberately not `unref`'d.
+ *
+ * Every caller is awaiting this, so a timer that does not hold the event loop
+ * open lets the process exit out from under the wait. That is not a hang that
+ * resolves late — node reports "Detected unsettled top-level await" and leaves
+ * with exit 13, so a rate-limit backoff would end the run instead of surviving it.
+ */
 function defaultSleep(ms: number): Promise<void> {
 	return new Promise((resolve) => {
-		setTimeout(resolve, ms).unref?.();
+		setTimeout(resolve, ms);
 	});
 }
 
