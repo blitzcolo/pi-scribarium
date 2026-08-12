@@ -1,6 +1,6 @@
 {
   "name": "pi-scribarium",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "private": true,
   "description": "Multi-agent orchestration for academic writing, built on the Pi Agent SDK",
   "keywords": [
