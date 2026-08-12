@@ -28,6 +28,12 @@ Each stage runs as an **isolated agent session**. Stages share nothing but files
 on disk, so a thirty-paper corpus never has to fit in one context window, and one
 unreadable PDF cannot discard the analyses you already paid for.
 
+There is a second pipeline for the question that comes *before* writing —
+[`explore`](#finding-a-contribution-the-explore-pipeline), which takes a research
+direction and your own material, searches the published literature, and reports
+which of the contributions you might claim are already taken. It is the only part
+of this tool that goes online.
+
 ## What it will not do
 
 **When writing a paper, it does not search the web or download anything.** You
@@ -96,6 +102,13 @@ The run halts at the outline for review:
 scribarium reject -m "Add a limitations section; the evaluation needs a baseline"
 scribarium resume                        # regenerates only the outline
 scribarium approve && scribarium resume  # continues to a full draft
+```
+
+If you do not yet know what the paper should claim, start with the other
+pipeline instead — it needs only `source/` filled in:
+
+```bash
+scribarium run explore --var direction="what you want to work on" --var name=my-topic
 ```
 
 ## Preparing your material
@@ -227,6 +240,17 @@ fails in a second rather than twelve papers into a fan-out.
 Most providers are built into pi and need only a credential. `models.json` is
 for the exception — a self-hosted or unlisted endpoint.
 
+The `explore` pipeline's literature search needs no account at all. Two optional
+environment variables make it behave better under load, and neither is a secret:
+
+| Variable | Effect |
+|---|---|
+| `SEMANTIC_SCHOLAR_API_KEY` | Raises that backend's rate limit. Free, on request from Semantic Scholar |
+| `SCRIBARIUM_MAILTO` | Your email, sent to OpenAlex; puts you in its faster "polite pool" |
+
+Without them the search still works — it is throttled harder, and a busy day
+means more retries, which the run reports rather than hides.
+
 ## Costs
 
 Two dials, set per run:
@@ -248,6 +272,12 @@ Cost is reported from the SDK's own accounting. Some providers price
 subscription models at zero — the report says so explicitly rather than letting
 `$0.0000` read as "this run was free".
 
+The `explore` pipeline is the larger bill of the two: it analyses up to 150
+fetched papers rather than the dozen you assembled by hand, so `bulk` is doing
+ten times the work. Both of its gates sit before a spending decision precisely
+so you can cut the list first, and papers already analysed are never re-analysed
+on a later run.
+
 ## Language
 
 The manuscript language is stated, not inferred:
@@ -262,6 +292,12 @@ corpus and your own material are in different languages — the profiler is told
 separate language-independent findings (structure, evidence expectations,
 citation density) from sentence-level prose observations, because only the former
 survives a change of language.
+
+In `explore` the split is fixed rather than chosen: **search queries are always
+English**, whatever language you state your direction in, because the indexes it
+queries hold English-language literature. The reports come back in the language
+of your direction. A non-English query is refused outright rather than allowed to
+return an empty result, which would read exactly like a topic nobody has studied.
 
 ## Gates, resume, and revision
 
@@ -286,6 +322,12 @@ scribarium resume                # continue; completed steps are never re-run
 
 Interrupted runs resume per item: a fan-out killed halfway re-runs only the
 papers it did not finish.
+
+Some gates ask you to **edit a file rather than write feedback**. The `explore`
+pipeline's two both work that way: you delete the candidates or the follow-up
+references you do not want from the JSON the gate names, then approve, and every
+later stage reads the pruned file. Rejecting is for work that should be
+regenerated; editing is for work that is right but too long.
 
 ## Citation checking
 
@@ -484,6 +526,23 @@ This tool drafts; it does not author. A few things follow from that.
 - **The citation checker proves traceability, not correctness.** It confirms a
   reference exists in your corpus. Whether it says what you claim it says is
   still your job.
+- **A `no-precedent` verdict is not a literature review, and must not become a
+  novelty claim.** It means three search engines, queried in one language with
+  the terms one model chose, returned nothing that another model recognised as
+  related. Every one of those steps can miss: the field may use different words,
+  the work may sit behind a paywall the run could not read, the relevant paper
+  may be a chapter or a thesis none of these indexes hold well. Writing "to the
+  best of our knowledge, the first…" on that basis puts a claim in your name that
+  nothing here can support. Use the verdicts to decide what to read next, then
+  establish novelty the ordinary way.
+- **The evidence counts are there to be read.** Each verdict states how many
+  papers were read in full, how many only as abstracts, and what could not be
+  fetched. A confident-sounding conclusion drawn from four abstracts is the
+  failure mode this disclosure exists to make visible — do not skip past it to
+  the table.
+- **Downloaded papers are other people's work.** The explore pipeline fetches
+  open-access PDFs into your workspace for analysis. Redistributing them, or
+  presenting what it summarises as your own, is the same problem it always was.
 
 ## Development
 
