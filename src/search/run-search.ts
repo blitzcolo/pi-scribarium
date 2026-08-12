@@ -1,3 +1,4 @@
+import { progressLabel } from "../util/progress.js";
 import { searchArxiv } from "./arxiv.js";
 import { assignIds, mergeRecords, paperKey } from "./dedupe.js";
 import type { Fetcher } from "./http.js";
@@ -42,9 +43,13 @@ export async function executeSearch(options: ExecuteSearchOptions): Promise<Exec
 	/** Backends that failed at least once, counted rather than listed per query. */
 	const backendFailures = new Map<SearchBackend, number>();
 
+	const startedAt = Date.now();
+
 	for (const [index, spec] of options.queries.entries()) {
 		const label = describeQuery(spec);
-		options.onProgress?.(`  search  ${label}`);
+		options.onProgress?.(
+			`  ${progressLabel(index + 1, options.queries.length, Date.now() - startedAt)} search  ${label}`,
+		);
 
 		// Backends run in parallel: the polite fetcher serializes per host, so
 		// three hosts genuinely overlap and arXiv's three-second floor does not

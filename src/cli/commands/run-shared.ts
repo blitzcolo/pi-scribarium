@@ -1,4 +1,5 @@
 import type { AgentRegistry } from "../../agents/registry.js";
+import { progressLabel } from "../../util/progress.js";
 import type { PipelineEvent } from "../../pipeline/engine.js";
 import type { PipelineSpec } from "../../pipeline/schema.js";
 import type { RunLayout } from "../../workspace/layout.js";
@@ -42,6 +43,8 @@ export const EXIT_AWAITING_GATE = 10;
 export class ProgressReporter {
 	private readonly tty = process.stdout.isTTY === true;
 	private fanoutLine = false;
+	/** When the current fan-out began, for the remaining-time estimate. */
+	private fanoutStartedAt = 0;
 
 	constructor(private readonly quiet: boolean) {}
 
@@ -53,6 +56,7 @@ export class ProgressReporter {
 				break;
 
 			case "fanout_start":
+				this.fanoutStartedAt = Date.now();
 				process.stdout.write(
 					`      ${event.total} items, ${event.concurrency} at a time\n`,
 				);
@@ -60,9 +64,17 @@ export class ProgressReporter {
 
 			case "fanout_progress": {
 				const done = event.completed + event.failed;
+				// The longest wait in a run is a fan-out over a large corpus, and it
+				// is the one place an estimate is both cheap and worth having: the
+				// items are similar and the concurrency is fixed.
+				const eta =
+					this.fanoutStartedAt === 0
+						? ""
+						: remainingLabel(done, event.total, Date.now() - this.fanoutStartedAt);
 				const line =
 					`      ${done}/${event.total} done` +
 					(event.failed > 0 ? `, ${event.failed} failed` : "") +
+					eta +
 					`  (${event.itemId})`;
 				if (this.tty) {
 					process.stdout.write(`\r\u001b[2K${line}`);
@@ -107,7 +119,15 @@ export class ProgressReporter {
 		if (!this.fanoutLine) return;
 		process.stdout.write("\n");
 		this.fanoutLine = false;
+		this.fanoutStartedAt = 0;
 	}
+}
+
+/** `, ~4m left` — empty until an estimate would be more use than noise. */
+function remainingLabel(done: number, total: number, elapsedMs: number): string {
+	const label = progressLabel(done, total, elapsedMs);
+	const gap = label.indexOf("~");
+	return gap === -1 ? "" : `, ${label.slice(gap)}`;
 }
 
 /** List every failed item so a partial run is actionable, not just "27/30". */

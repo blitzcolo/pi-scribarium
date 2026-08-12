@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
+import { progressLabel } from "../util/progress.js";
 import type { Fetcher } from "./http.js";
 import type { PaperRecord } from "./types.js";
 
@@ -70,8 +71,17 @@ export async function fetchPapers(options: FetchPapersOptions): Promise<FetchPap
 	const existing = readManifest(options.dir);
 	const entries = new Map(existing.papers.map((entry) => [entry.id, entry]));
 
+	const total = options.papers.length;
+	const startedAt = Date.now();
+	let done = 0;
+
 	for (const paper of options.papers) {
 		if (options.signal?.aborted === true) break;
+		done += 1;
+		// Downloads are sequential and rate-limited, so at a hundred papers this
+		// runs for minutes with no other sign of life. The counter distinguishes
+		// slow from stuck; the estimate says whether to wait for it.
+		const where = progressLabel(done, total, Date.now() - startedAt);
 
 		// The sidecar is rewritten every run: it is cheap, and metadata improves as
 		// backends update. The PDF beside it is not touched.
@@ -93,14 +103,15 @@ export async function fetchPapers(options: FetchPapersOptions): Promise<FetchPap
 				points: [...new Set([...(previous?.points ?? []), ...paper.points])],
 				file: already,
 			});
-			options.onProgress?.(`  skipped   ${paper.id} (already fetched)`);
+			options.onProgress?.(`  ${where} skipped   ${paper.id} (already fetched)`);
 			continue;
 		}
 
 		const entry = await fetchOne(paper, options);
 		entries.set(paper.id, entry);
 		options.onProgress?.(
-			`  ${entry.status.padEnd(9)} ${paper.id}${entry.error === undefined ? "" : `: ${entry.error}`}`,
+			`  ${where} ${entry.status.padEnd(9)} ${paper.id}` +
+				(entry.error === undefined ? "" : `: ${entry.error}`),
 		);
 
 		// Written after every paper rather than at the end: a kill costs the paper

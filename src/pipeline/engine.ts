@@ -835,9 +835,26 @@ async function executeForeach(
 	stepState.turns = turns;
 	// Outputs span every completed item, carried-over ones included, because the
 	// reducer downstream reads the whole set rather than just this attempt's.
-	stepState.outputs = Object.values(stepState.items ?? {})
-		.filter((entry) => entry.status === "completed")
-		.flatMap((entry) => entry.outputs ?? []);
+	//
+	// Ordered by item, not by completion. `Object.values` walks insertion order,
+	// which under concurrency is whichever session finished first — so the same
+	// corpus produced a different list on every run, and that list is rendered
+	// into the reducer's prompt as `${steps.<id>.outputs}`. A prompt that varies
+	// run to run for identical inputs is not reproducible, and the difference is
+	// invisible until someone compares two transcripts.
+	const settled = stepState.items ?? {};
+	const ordered = items
+		.map((item) => settled[item.id])
+		.filter((entry) => entry?.status === "completed");
+	// An item whose source file vanished between attempts is no longer in `items`
+	// but may still hold a completed entry; keep it, in a stable position.
+	const seen = new Set(items.map((item) => item.id));
+	const orphaned = Object.entries(settled)
+		.filter(([id, entry]) => !seen.has(id) && entry.status === "completed")
+		.sort(([left], [right]) => left.localeCompare(right))
+		.map(([, entry]) => entry);
+
+	stepState.outputs = [...ordered, ...orphaned].flatMap((entry) => entry?.outputs ?? []);
 
 	// A cancelled fan-out is not a partial success. Without this the common case —
 	// Ctrl-C with no `max_failures` set — leaves `failed` at just the handful that

@@ -206,6 +206,42 @@ describe("foreach fan-out", () => {
 		]);
 	});
 
+	// `stepState.outputs` is rendered into the reducer's prompt as
+	// `${steps.<id>.outputs}`. Built from the items record's insertion order it
+	// followed whichever session finished first, so the same corpus produced a
+	// different prompt on every run — reproducible only by accident, and the
+	// difference invisible until someone diffed two transcripts. It surfaced as an
+	// intermittent failure in the test above once the suite grew enough to change
+	// the scheduling.
+	it("lists fan-out outputs in item order, not completion order", async () => {
+		seedCorpus(6);
+		// Six items over four workers, so the last two necessarily settle out of
+		// step with the first four.
+		const written = new Set<string>();
+		const script: Script = (ctx) => {
+			const id = /analysis\/([a-z0-9-]+)\.md/.exec(ctx.systemPrompt + ctx.lastUserText)?.[1];
+			if (id === undefined) return { text: "Done." };
+			if (!written.has(id)) {
+				written.add(id);
+				return {
+					toolCalls: [{ name: "write", args: { path: `analysis/${id}.md`, content: `# ${id}\n` } }],
+				};
+			}
+			return { text: `Wrote analysis for ${id}.` };
+		};
+
+		const { final } = await execute(PIPELINE(), script);
+
+		expect(final.steps["analyze"]?.outputs).toEqual([
+			"analysis/paper-01.md",
+			"analysis/paper-02.md",
+			"analysis/paper-03.md",
+			"analysis/paper-04.md",
+			"analysis/paper-05.md",
+			"analysis/paper-06.md",
+		]);
+	});
+
 	it("records the model each step actually ran on", async () => {
 		seedCorpus(2);
 		const { final } = await execute(PIPELINE(), analystScript());

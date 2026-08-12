@@ -355,6 +355,14 @@ for.
   it — a human asking for the step again must not be served from cache.
 - `optional: true` turns "matched no items" into a skipped step. A skipped step
   does not fail the run; it is a deliberate outcome, not an error.
+- **`stepState.outputs` is ordered by item, never by completion.** It is rendered
+  into the reducer's prompt as `${steps.<id>.outputs}`, and built from the items
+  record's insertion order it followed whichever session finished first — so the
+  same corpus produced a different prompt every run. Reproducible only by
+  accident, and invisible until two transcripts are diffed. It surfaced as an
+  intermittent failure in `fanout.test.ts` once the suite grew enough to shift
+  the scheduling; `pool.test.ts` had always guaranteed input order for results,
+  but the state written alongside them did not inherit it.
 
 ## The network layer
 
@@ -379,6 +387,14 @@ appears in it.
 - **A dead backend is a value, not an exception.** It becomes a warning on an `ok` result and the
   other two continue; one index being down should narrow a search, not end a paid run. The warning
   matters because a short result list otherwise reads as a short literature.
+- **Retries and rate-limit waits are announced** through `PoliteFetcherOptions.onNotice`, which the
+  searching builtins route into their progress output. This is gotcha #21 applied to the HTTP layer:
+  a backoff of up to a minute is indistinguishable from a hang, and the operator's natural response
+  — kill it and start over — is strictly worse than waiting. A server-supplied `Retry-After` is
+  reported as `rate-limited` and our own guess as `retry`, because the two call for different
+  reactions. Note the notice hook only exists on a fetcher the builtin constructs itself: an
+  injected one (tests, or a caller with its own transport) reports nothing, which is why
+  `search-builtins.test.ts` covers the un-injected path by stubbing `globalThis.fetch`.
 - **Non-English queries are refused at the tool boundary**, not merely discouraged in a prompt.
   These indexes hold English literature, so a Chinese query returns nothing — and an empty result
   is indistinguishable from a topic nobody has studied, which is the one wrong answer this pipeline

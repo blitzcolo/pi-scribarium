@@ -388,6 +388,31 @@ on — how many papers were read in full, how many only as abstracts, how many
 could not be fetched. A `no-precedent` built on four abstracts is a weak claim,
 and the report says so rather than letting it read as an open field.
 
+### What a long stage looks like while it runs
+
+```
+[8/19] analyze (foreach)
+      100 items, 4 at a time
+      47/100 done, 2 failed, ~9m12s left  (zhang-2023-cross-modal-attention)
+```
+
+Searching and downloading print one line per query and per paper, each carrying
+a `[12/100]` counter and an estimate once there is enough history to make one
+honest. **Rate limiting is announced rather than absorbed**, because a silent
+sixty-second backoff is indistinguishable from a hang:
+
+```
+  rate limited by api.semanticscholar.org; waiting 30s as asked (retry 1/4)
+  api.openalex.org did not answer (HTTP 502); retrying in 2s (2/4)
+```
+
+Failures never take the run down with them, and each degrades to the next-best
+thing rather than to nothing: a backend that stays down leaves a warning on the
+results file and the other two carry on; a PDF that turns out to be a login page
+falls back to an abstract-only card; a paper with neither is recorded as a
+countable gap that reaches the verdict. Anything genuinely lost is listed at the
+end with the path to its log.
+
 ## Pipeline reference
 
 ```yaml

@@ -43,6 +43,26 @@ const REQUEST_TIMEOUT_MS = 60_000;
 
 const DEFAULT_MAX_RETRIES = 4;
 
+/**
+ * Something the caller should hear about while a request is being retried.
+ *
+ * Rate limiting is the reason this exists. A backoff of up to a minute is
+ * indistinguishable from a hang unless it is announced, and the same trap has
+ * already been documented one layer up for the model client's own retries
+ * (CLAUDE.md gotcha #21): a 429 storm that is silently absorbed looks like the
+ * tool being slow, and the operator's natural response — kill it and start
+ * again — makes it strictly worse.
+ */
+export interface FetchNotice {
+	kind: "retry" | "rate-limited";
+	url: string;
+	/** 1-based index of the retry about to be made. */
+	attempt: number;
+	maxRetries: number;
+	waitMs: number;
+	reason: string;
+}
+
 export interface PoliteFetcherOptions {
 	/** Underlying transport. Defaults to global `fetch`; tests pass their own. */
 	fetch?: Fetcher;
@@ -52,6 +72,8 @@ export interface PoliteFetcherOptions {
 	sleep?: (ms: number) => Promise<void>;
 	/** Per-host minimum spacing; defaults to the table above. */
 	intervals?: ReadonlyMap<string, number>;
+	/** Told about every retry and every rate-limit wait. */
+	onNotice?: (notice: FetchNotice) => void;
 }
 
 /**
@@ -97,10 +119,25 @@ export function createPoliteFetcher(options: PoliteFetcherOptions = {}): Fetcher
 
 	async function attempt(url: string, init?: RequestInit): Promise<Response> {
 		let lastError: unknown;
+		/** Set when the previous response asked for a specific wait. */
+		let requestedWaitMs: number | undefined;
 
 		for (let tries = 0; tries <= maxRetries; tries += 1) {
 			if (tries > 0) {
-				await sleep(Math.min(MAX_BACKOFF_MS, 1000 * 2 ** (tries - 1)));
+				// A server-supplied Retry-After beats our own guess: it knows when its
+				// window resets and we do not.
+				const backoff = Math.min(MAX_BACKOFF_MS, 1000 * 2 ** (tries - 1));
+				const wait = requestedWaitMs ?? backoff;
+				options.onNotice?.({
+					kind: requestedWaitMs === undefined ? "retry" : "rate-limited",
+					url,
+					attempt: tries,
+					maxRetries,
+					waitMs: wait,
+					reason: lastError instanceof Error ? lastError.message : String(lastError),
+				});
+				requestedWaitMs = undefined;
+				await sleep(wait);
 			}
 
 			let response: Response;
@@ -115,11 +152,7 @@ export function createPoliteFetcher(options: PoliteFetcherOptions = {}): Fetcher
 
 			if (!isRetryable(response.status)) return response;
 			lastError = new Error(`HTTP ${response.status}`);
-
-			const after = retryAfterMs(response);
-			if (after !== undefined && tries < maxRetries) {
-				await sleep(Math.min(MAX_BACKOFF_MS, after));
-			}
+			requestedWaitMs = retryAfterMs(response);
 		}
 
 		throw lastError instanceof Error ? lastError : new Error(String(lastError));

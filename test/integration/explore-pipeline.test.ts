@@ -271,6 +271,8 @@ async function run(
 	 */
 	const active = new Map<string, Set<string>>();
 	const peak = new Map<string, number>();
+	/** Concurrency each fan-out asked the pool for. */
+	const requested = new Map<string, number>();
 	const mark = (stepId: string, itemId: string, starting: boolean): void => {
 		const live = active.get(stepId) ?? new Set<string>();
 		active.set(stepId, live);
@@ -289,6 +291,7 @@ async function run(
 		fetcher: fetch,
 		gate: async () => ({ kind: "approve" }),
 		onEvent: (event) => {
+			if (event.type === "fanout_start") requested.set(event.stepId, event.concurrency);
 			if (event.type === "stage" && event.itemId !== undefined) {
 				mark(event.stepId, event.itemId, true);
 			}
@@ -296,7 +299,7 @@ async function run(
 		},
 	});
 
-	return { final, requests, scripted, analysed: driver.analysed, peak };
+	return { final, requests, scripted, analysed: driver.analysed, peak, requested };
 }
 
 const read = (relative: string) => fs.readFileSync(path.join(workspace, relative), "utf-8");
@@ -398,7 +401,7 @@ describe("the shipped explore pipeline", () => {
 			authors: [{ name: `Author${index} Surname${index}` }],
 		}));
 
-		const { final, peak } = await run({
+		const { final, peak, requested } = await run({
 			routes: [
 				{ match: "export.arxiv.org", body: EMPTY_ARXIV },
 				{ match: "api.openalex.org", body: EMPTY_OPENALEX },
@@ -412,8 +415,18 @@ describe("the shipped explore pipeline", () => {
 		// explore.yaml asks for 4 in the analysis fan-outs and 3 in the judging one.
 		expect(peak.get("analyze")).toBeLessThanOrEqual(4);
 		expect(peak.get("judge")).toBeLessThanOrEqual(3);
-		// And it really did run them concurrently, rather than passing by serialising.
-		expect(peak.get("analyze")).toBeGreaterThan(1);
+
+		// The pool was also asked for real concurrency, so a `parallel: 1` slipping
+		// into the pipeline would fail here rather than trivially satisfying the
+		// bound above. Asserting *observed* overlap instead would depend on how the
+		// event loop happened to interleave — a flaky test dressed as a stronger
+		// one. `pool.test.ts` proves the overlap deterministically, with gates.
+		//
+		// These are effective values, `min(parallel, items)`: 24 papers clamp to the
+		// step's 4, while judging two candidates cannot use more than two workers
+		// however many the step asks for.
+		expect(requested.get("analyze")).toBe(4);
+		expect(requested.get("judge")).toBe(2);
 	});
 
 	it("stops at the first gate when the reviewer defers", async () => {

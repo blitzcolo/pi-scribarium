@@ -12,9 +12,10 @@ import {
 	parseExtensionFilter,
 } from "../ingest/pdf.js";
 import { fetchPapers } from "../search/fetch-papers.js";
-import { createPoliteFetcher, type Fetcher } from "../search/http.js";
+import { createPoliteFetcher, type FetchNotice, type Fetcher } from "../search/http.js";
 import { executeSearch } from "../search/run-search.js";
 import type { PaperRecord, QueriesFile, QuerySpec, ResultsFile } from "../search/types.js";
+import { formatDuration } from "../util/progress.js";
 import type { BuiltinStepSpec } from "./schema.js";
 
 export interface BuiltinContext {
@@ -103,7 +104,7 @@ async function runSearchPapers(
 
 	const result = await executeSearch({
 		queries,
-		fetcher: ctx.fetcher ?? createPoliteFetcher(),
+		fetcher: fetcherFor(ctx),
 		perQueryLimit,
 		maxTotal,
 		exclude,
@@ -153,7 +154,7 @@ async function runFetchPapers(step: BuiltinStepSpec, ctx: BuiltinContext): Promi
 	const outcome = await fetchPapers({
 		papers: results.papers,
 		dir: path.resolve(ctx.workspace, dir),
-		fetcher: ctx.fetcher ?? createPoliteFetcher(),
+		fetcher: fetcherFor(ctx),
 		minPdfBytes,
 		...(ctx.onProgress !== undefined ? { onProgress: ctx.onProgress } : {}),
 	});
@@ -316,6 +317,38 @@ function numberOption(step: BuiltinStepSpec, key: string, fallback: number): num
 /** `exactOptionalPropertyTypes` rejects an explicit undefined, so omit the key. */
 function optional<K extends string>(key: K, value: string | undefined): Record<K, string> | Record<string, never> {
 	return value === undefined ? {} : ({ [key]: value } as Record<K, string>);
+}
+
+/**
+ * The fetcher a searching builtin should use.
+ *
+ * When one was injected — tests, or a caller with its own transport — it is
+ * used as-is. Otherwise a polite one is built here rather than at module load,
+ * so its retry notices can be routed into this step's progress output. Without
+ * that, a rate-limited run spends up to a minute per attempt in silence, and
+ * the operator's reasonable conclusion is that it has hung.
+ */
+function fetcherFor(ctx: BuiltinContext): Fetcher {
+	if (ctx.fetcher !== undefined) return ctx.fetcher;
+	return createPoliteFetcher({ onNotice: (notice) => ctx.onProgress?.(describeNotice(notice)) });
+}
+
+function describeNotice(notice: FetchNotice): string {
+	const wait = formatDuration(notice.waitMs);
+	const host = hostOf(notice.url);
+	return notice.kind === "rate-limited"
+		? `  rate limited by ${host}; waiting ${wait} as asked ` +
+				`(retry ${notice.attempt}/${notice.maxRetries})`
+		: `  ${host} did not answer (${notice.reason}); retrying in ${wait} ` +
+				`(${notice.attempt}/${notice.maxRetries})`;
+}
+
+function hostOf(url: string): string {
+	try {
+		return new URL(url).host;
+	} catch {
+		return url;
+	}
 }
 
 /**

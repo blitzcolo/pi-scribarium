@@ -184,6 +184,44 @@ describe("search-papers builtin", () => {
 		expect(readJson<{ papers: unknown[] }>("results.json").papers).toEqual([]);
 	});
 
+	// The fetcher only reports retries if the builtin builds it with a notice
+	// hook; an injected one has none. This asserts the wiring, not the fetcher —
+	// without it a rate-limited run is silent for up to a minute per attempt.
+	it("routes rate-limit waits into the step's progress output", async () => {
+		write(
+			"queries.json",
+			JSON.stringify({ version: 1, queries: [{ kind: "query", point: "ip-1", query: "x" }] }),
+		);
+
+		const messages: string[] = [];
+		let attempt = 0;
+		// No `fetcher` in the context, so the builtin constructs its own — which is
+		// the code path a real run takes.
+		const ctx: BuiltinContext = {
+			workspace,
+			resolveOutput: (relative) => path.resolve(workspace, relative),
+			onProgress: (message) => messages.push(message),
+		};
+		const original = globalThis.fetch;
+		globalThis.fetch = (async () => {
+			attempt += 1;
+			return attempt === 1
+				? new Response("slow down", { status: 429, headers: { "retry-after": "0" } })
+				: new Response(JSON.stringify({ data: [] }));
+		}) as typeof globalThis.fetch;
+
+		try {
+			await runBuiltin(
+				step("search-papers", { queries: "queries.json", out: "results.json" }),
+				ctx,
+			);
+		} finally {
+			globalThis.fetch = original;
+		}
+
+		expect(messages.join("\n")).toContain("rate limited by");
+	});
+
 	it("fails with the path when the query file is unreadable", async () => {
 		const result = await runBuiltin(
 			step("search-papers", { queries: "missing.json", out: "results.json" }),

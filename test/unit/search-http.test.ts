@@ -134,6 +134,65 @@ describe("createPoliteFetcher", () => {
 		expect(seen?.get("x-api-key")).toBe("secret-key");
 	});
 
+	// A silent backoff of up to a minute is indistinguishable from a hang, and the
+	// operator's reasonable response — kill it and start over — makes it worse.
+	// The same trap is documented one layer up for the model client's retries.
+	it("announces a rate-limit wait and names the server as the cause", async () => {
+		const notices: string[] = [];
+		let attempt = 0;
+		const polite = createPoliteFetcher({
+			intervals: FAST.intervals,
+			sleep: async () => {},
+			onNotice: (notice) => notices.push(`${notice.kind} ${notice.waitMs} ${notice.attempt}`),
+			fetch: async () => {
+				attempt += 1;
+				return attempt === 1
+					? new Response("slow down", { status: 429, headers: { "retry-after": "30" } })
+					: new Response("ok");
+			},
+		});
+
+		await polite("https://example.org/a");
+
+		// The wait is attributed to the server's own Retry-After rather than to our
+		// guess, because the two call for different responses from a human.
+		expect(notices).toEqual(["rate-limited 30000 1"]);
+	});
+
+	it("announces an ordinary retry with its reason", async () => {
+		const notices: Array<{ kind: string; reason: string }> = [];
+		let attempt = 0;
+		const polite = createPoliteFetcher({
+			intervals: FAST.intervals,
+			sleep: async () => {},
+			onNotice: (notice) => notices.push({ kind: notice.kind, reason: notice.reason }),
+			fetch: async () => {
+				attempt += 1;
+				if (attempt === 1) throw new Error("ECONNREFUSED");
+				return new Response("ok");
+			},
+		});
+
+		await polite("https://example.org/a");
+
+		expect(notices).toHaveLength(1);
+		expect(notices[0]?.kind).toBe("retry");
+		expect(notices[0]?.reason).toContain("ECONNREFUSED");
+	});
+
+	it("says nothing when a request succeeds first time", async () => {
+		const notices: unknown[] = [];
+		const polite = createPoliteFetcher({
+			...FAST,
+			onNotice: (notice) => notices.push(notice),
+			fetch: async () => new Response("ok"),
+		});
+
+		await polite("https://example.org/a");
+
+		expect(notices).toEqual([]);
+	});
+
 	it("serializes requests to one host", async () => {
 		const order: string[] = [];
 		const polite = createPoliteFetcher({
