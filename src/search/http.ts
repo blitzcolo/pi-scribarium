@@ -160,6 +160,7 @@ export function createPoliteFetcher(options: PoliteFetcherOptions = {}): Fetcher
 	};
 
 	async function attempt(url: string, host: string, init?: RequestInit): Promise<Response> {
+		const interval = intervals.get(host) ?? DEFAULT_INTERVAL_MS;
 		let lastError: unknown;
 		/** Set when the previous response asked for a specific wait. */
 		let requestedWaitMs: number | undefined;
@@ -169,7 +170,17 @@ export function createPoliteFetcher(options: PoliteFetcherOptions = {}): Fetcher
 				// A server-supplied Retry-After beats our own guess: it knows when its
 				// window resets and we do not.
 				const backoff = Math.min(MAX_BACKOFF_MS, 1000 * 2 ** (tries - 1));
-				const wait = requestedWaitMs ?? backoff;
+				// Floored by the host's own interval, because a retry is another
+				// request to that host and owes it the same spacing an ordinary one
+				// does. Retries happen inside the per-host turn, so nothing else
+				// enforces the floor here: with a bare 1s/2s/4s ladder a single 429
+				// became five requests to arXiv inside fifteen seconds — five times
+				// its published rate, from the same client that waits 3.1s between
+				// ordinary calls. That turns one refusal into a block, and the block
+				// into the next refusal. Observed as an hour of `search_papers` calls
+				// that each burned ~50s exhausting retries before silently degrading
+				// to whichever backend was still answering.
+				const wait = Math.max(requestedWaitMs ?? backoff, interval);
 				options.onNotice?.({
 					kind: requestedWaitMs === undefined ? "retry" : "rate-limited",
 					url,

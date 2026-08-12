@@ -122,6 +122,52 @@ describe("createPoliteFetcher", () => {
 		expect(Math.max(...waits)).toBeLessThanOrEqual(60_000);
 	});
 
+	// A retry is another request to the same host, and retries run inside the
+	// per-host turn where nothing else enforces the floor. The bare ladder starts
+	// at 1s, so one 429 became five requests to arXiv inside fifteen seconds —
+	// five times its published rate, from the client that waits 3.1s between
+	// ordinary calls. One refusal then becomes a block and the block becomes the
+	// next refusal; it cost a live run an hour before anyone looked.
+	it("never retries faster than the host's own interval", async () => {
+		const waits: number[] = [];
+		const polite = createPoliteFetcher({
+			intervals: new Map([["export.arxiv.org", 3100]]),
+			sleep: async (ms) => {
+				waits.push(ms);
+			},
+			fetch: async () => new Response("slow down", { status: 429 }),
+			maxRetries: 3,
+		});
+
+		await expect(polite("https://export.arxiv.org/api/query?x=1")).rejects.toThrow();
+
+		expect(waits).toHaveLength(3);
+		expect(Math.min(...waits)).toBeGreaterThanOrEqual(3100);
+	});
+
+	it("floors a Retry-After that is shorter than the host interval", async () => {
+		const waits: number[] = [];
+		let attempt = 0;
+		const polite = createPoliteFetcher({
+			intervals: new Map([["export.arxiv.org", 3100]]),
+			sleep: async (ms) => {
+				waits.push(ms);
+			},
+			fetch: async () => {
+				attempt += 1;
+				return attempt === 1
+					? new Response("slow down", { status: 429, headers: { "retry-after": "0.5" } })
+					: new Response("ok");
+			},
+		});
+
+		await polite("https://export.arxiv.org/api/query?x=1");
+
+		// The server knowing its window better than we do does not license us to
+		// undercut the rate it publishes.
+		expect(waits).toEqual([3100]);
+	});
+
 	it("identifies itself by name and version", async () => {
 		let seen: Headers | undefined;
 		const polite = createPoliteFetcher({
