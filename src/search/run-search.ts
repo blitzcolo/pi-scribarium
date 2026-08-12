@@ -1,6 +1,6 @@
 import { progressLabel } from "../util/progress.js";
 import { searchArxiv } from "./arxiv.js";
-import { assignIds, mergeRecords, paperKey } from "./dedupe.js";
+import { assignIds, mergeRecords, paperKeys } from "./dedupe.js";
 import type { Fetcher } from "./http.js";
 import { searchOpenAlex } from "./openalex.js";
 import { searchSemanticScholar } from "./semantic-scholar.js";
@@ -36,7 +36,10 @@ export interface ExecuteSearchResult {
 
 export async function executeSearch(options: ExecuteSearchOptions): Promise<ExecuteSearchResult> {
 	const warnings: string[] = [];
-	const excluded = new Set((options.exclude ?? []).map((paper) => paperKey(paper)));
+	// Every key each excluded paper claims, so round two recognises a paper it
+	// already has under any of them. Keyed by precedence alone, the arXiv version
+	// of a paper round one took from OpenAlex read as new and was downloaded again.
+	const excluded = new Set((options.exclude ?? []).flatMap((paper) => paperKeys(paper)));
 
 	/** Query index -> its papers, so the cap can be spread across queries. */
 	const perQuery: PaperRecord[][] = [];
@@ -101,7 +104,7 @@ export async function executeSearch(options: ExecuteSearchOptions): Promise<Exec
 	const kept: PaperRecord[] = [];
 	let dropped = 0;
 	for (const paper of ranked) {
-		if (excluded.has(paperKey(paper))) {
+		if (paperKeys(paper).some((key) => excluded.has(key))) {
 			dropped += 1;
 			continue;
 		}

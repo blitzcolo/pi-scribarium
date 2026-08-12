@@ -12,18 +12,67 @@ import type { PaperRecord } from "./types.js";
  */
 
 /**
- * Identity, most reliable first.
+ * Every identity a record claims, not just its most reliable one.
  *
- * A DOI is assigned by the publisher and is the same string everywhere. An arXiv
- * id is stable once versions are stripped. A normalized title is a guess: it
- * misses a paper retitled between preprint and proceedings, and would collide on
- * two genuinely different papers sharing a generic title — so it is the last
- * resort, and the cost of a miss is one duplicate card rather than a wrong merge.
+ * This used to return a single key by precedence — DOI, else arXiv id, else
+ * title — and that is what put the same paper in a corpus three times:
+ *
+ *     doi: 10.24963/ijcai.2022/487       the IJCAI version, from OpenAlex
+ *     arxivId: 2205.11876                the preprint, from arXiv
+ *     doi: 10.48550/arxiv.2205.11876     the same preprint, from OpenAlex
+ *
+ * Two failures. The third record's DOI is DataCite's scheme for arXiv preprints
+ * and *contains* the arXiv id, so it and the second are provably one file — but
+ * precedence filed one under `doi:` and the other under `arxiv:` and they never
+ * met. And a record carrying any DOI never reached the title fallback at all, so
+ * a preprint could never be recognised as its own published version, which is
+ * the most common duplication in this literature.
+ *
+ * Returning every key and merging on any overlap fixes both. The title key keeps
+ * the first author's surname with it, because a bare normalized title would
+ * collide on generic ones; it deliberately carries no year, since the whole
+ * point is to join a preprint to a paper published the following year.
  */
-export function paperKey(paper: PaperRecord): string {
-	if (paper.doi !== undefined && paper.doi !== "") return `doi:${paper.doi}`;
-	if (paper.arxivId !== undefined && paper.arxivId !== "") return `arxiv:${paper.arxivId}`;
-	return `title:${normalizeTitle(paper.title)}`;
+export function paperKeys(paper: PaperRecord): string[] {
+	const keys: string[] = [];
+
+	const arxiv = arxivIdOf(paper);
+	if (arxiv !== undefined) keys.push(`arxiv:${arxiv}`);
+
+	const doi = normalizeDoi(paper.doi);
+	// An arXiv DOI adds nothing once its id is keyed, and keeping it would make
+	// the same preprint match under two spellings depending on the backend.
+	if (doi !== undefined && arxivFromDoi(doi) === undefined) keys.push(`doi:${doi}`);
+
+	const title = normalizeTitle(paper.title);
+	if (title !== "") keys.push(`title:${title}|${surnameOf(paper.authors[0])}`);
+
+	return keys;
+}
+
+/** DOIs are case-insensitive and arrive with and without a resolver prefix. */
+function normalizeDoi(doi: string | undefined): string | undefined {
+	const clean = doi
+		?.trim()
+		.replace(/^https?:\/\/(dx\.)?doi\.org\//i, "")
+		.toLowerCase();
+	return clean === undefined || clean === "" ? undefined : clean;
+}
+
+/** `10.48550/arXiv.2205.11876` is DataCite's DOI for an arXiv preprint. */
+function arxivFromDoi(normalizedDoi: string): string | undefined {
+	return /^10\.48550\/arxiv\.(.+)$/.exec(normalizedDoi)?.[1];
+}
+
+function arxivIdOf(paper: PaperRecord): string | undefined {
+	const direct = paper.arxivId?.trim().toLowerCase();
+	if (direct !== undefined && direct !== "") return direct;
+	const doi = normalizeDoi(paper.doi);
+	return doi === undefined ? undefined : arxivFromDoi(doi);
+}
+
+function surnameOf(author: string | undefined): string {
+	return normalizeTitle(lastName(author));
 }
 
 export function normalizeTitle(title: string): string {
@@ -41,19 +90,54 @@ export function normalizeTitle(title: string): string {
  * order and the result is the same on every run.
  */
 export function mergeRecords(papers: readonly PaperRecord[]): PaperRecord[] {
-	const merged = new Map<string, PaperRecord>();
-
-	for (const paper of papers) {
-		const key = paperKey(paper);
-		const existing = merged.get(key);
-		if (existing === undefined) {
-			merged.set(key, { ...paper, backends: [...paper.backends], queries: [...paper.queries], points: [...paper.points] });
-			continue;
+	// Union-find rather than a keyed map, because identity is now a relation
+	// rather than a lookup: A and B may share an arXiv id while B and C share a
+	// title, which makes all three one paper even though A and C have nothing in
+	// common. The root is always the lowest index, so the survivor keeps the
+	// position of its first occurrence — the ranking upstream depends on order.
+	const parent = papers.map((_, index) => index);
+	const find = (index: number): number => {
+		let node = index;
+		while (parent[node] !== node) {
+			parent[node] = parent[parent[node] as number] as number;
+			node = parent[node] as number;
 		}
-		merged.set(key, mergeInto(existing, paper));
-	}
+		return node;
+	};
+	const join = (left: number, right: number): void => {
+		const a = find(left);
+		const b = find(right);
+		if (a !== b) parent[Math.max(a, b)] = Math.min(a, b);
+	};
 
-	return [...merged.values()];
+	const firstSeen = new Map<string, number>();
+	papers.forEach((paper, index) => {
+		for (const key of paperKeys(paper)) {
+			const previous = firstSeen.get(key);
+			if (previous === undefined) firstSeen.set(key, index);
+			else join(previous, index);
+		}
+	});
+
+	const out: PaperRecord[] = [];
+	const slotOf = new Map<number, number>();
+	papers.forEach((paper, index) => {
+		const root = find(index);
+		const slot = slotOf.get(root);
+		if (slot === undefined) {
+			slotOf.set(root, out.length);
+			out.push({
+				...paper,
+				backends: [...paper.backends],
+				queries: [...paper.queries],
+				points: [...paper.points],
+			});
+			return;
+		}
+		out[slot] = mergeInto(out[slot] as PaperRecord, paper);
+	});
+
+	return out;
 }
 
 function mergeInto(base: PaperRecord, extra: PaperRecord): PaperRecord {
