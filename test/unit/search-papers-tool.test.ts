@@ -198,3 +198,42 @@ describe("granting a custom tool", () => {
 		]);
 	});
 });
+
+/**
+ * The three indexes are independent hosts with nothing to say to each other, so
+ * awaiting them in turn bought nothing and cost the sum instead of the slowest.
+ * It went unnoticed while every backend answered in a second; it surfaced when
+ * two of them started spending a full retry budget, and the SDK runs these tool
+ * calls one at a time, so the sum was paid three times per turn.
+ */
+describe("backend concurrency", () => {
+	it("queries the three indexes concurrently", async () => {
+		const bodies: Record<string, string> = {
+			"export.arxiv.org": EMPTY_ARXIV,
+			"api.semanticscholar.org": s2([]),
+			"api.openalex.org": EMPTY_OPENALEX,
+		};
+		const order: string[] = [];
+		const fetch = async (url: string): Promise<Response> => {
+			const host = new URL(url).host;
+			order.push(`start ${host}`);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+			order.push(`end ${host}`);
+			return new Response(bodies[host] ?? "");
+		};
+
+		const tool = createSearchPapersTool({ fetcher: fetch });
+		await tool.execute(
+			"call-1",
+			{ query: "infrared visible fusion" },
+			undefined,
+			undefined,
+			undefined as never,
+		);
+
+		expect(order).toHaveLength(6);
+		// Serialized this reads start/end/start/end/start/end. All three must be in
+		// flight before any of them lands.
+		expect(order.slice(0, 3).filter((entry) => entry.startsWith("start"))).toHaveLength(3);
+	});
+});

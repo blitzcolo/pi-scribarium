@@ -112,16 +112,29 @@ export function createSearchPapersTool(options: SearchPapersToolOptions = {}): T
 			const backend = params.backend ?? "all";
 			const spec: QuerySpec = { kind: "query", point: "probe", query };
 
-			const results: BackendResult[] = [];
+			// Three independent hosts with nothing to say to each other, so there is
+			// nothing here to serialize. Awaiting them in turn cost the sum of the
+			// three rather than the slowest, and with two of them spending their full
+			// retry budget that was the difference between ~50s and ~70s for a single
+			// probe — on top of which the SDK already runs these tool calls one at a
+			// time, so the sum was paid three times per turn.
+			//
+			// Concurrency raises no host's request rate: the fetcher still queues per
+			// host, which is where politeness is enforced. `executeSearch` on the
+			// builtin path always did this; only the tool did not. `Promise.all`
+			// resolves in input order regardless of who finishes first, so the
+			// rendered output stays deterministic.
+			const pending: Array<Promise<BackendResult>> = [];
 			if (backend === "all" || backend === "arxiv") {
-				results.push(await searchArxiv(spec, limit, { fetcher }));
+				pending.push(searchArxiv(spec, limit, { fetcher }));
 			}
 			if (backend === "all" || backend === "semanticscholar") {
-				results.push(await searchSemanticScholar(spec, limit, { fetcher }));
+				pending.push(searchSemanticScholar(spec, limit, { fetcher }));
 			}
 			if (backend === "all" || backend === "openalex") {
-				results.push(await searchOpenAlex(spec, limit, { fetcher }));
+				pending.push(searchOpenAlex(spec, limit, { fetcher }));
 			}
+			const results = await Promise.all(pending);
 
 			const failures = results.filter((result) => result.error !== undefined);
 			const papers = mergeRecords(results.flatMap((result) => result.papers))
