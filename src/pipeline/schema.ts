@@ -115,6 +115,17 @@ export interface GateStepSpec {
 	onReject?: string;
 	/** Items the reviewer may keep a subset of. */
 	select?: GateSelectSpec;
+	/**
+	 * Skip the gate when every `show:` artifact is missing or blank.
+	 *
+	 * For a gate that exists to offer a decision only sometimes — supplying PDFs
+	 * that failed to download, when some failed. Without it the run stops after a
+	 * clean fetch too, and in file mode that costs an exit 10 and an
+	 * approve-and-resume cycle to answer a question nobody was asked. A skipped
+	 * gate is a deliberate outcome rather than an error, as it is for a fan-out
+	 * that matched no items.
+	 */
+	optional?: boolean;
 	outputs: string[];
 }
 

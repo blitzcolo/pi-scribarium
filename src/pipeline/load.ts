@@ -180,14 +180,28 @@ function readStep(
 				: `Approve ${id}`;
 		const onReject = optionalString(step["on_reject"], ["steps", index, "on_reject"], ctx);
 		const select = readGateSelect(step["select"], index, id, ctx);
+		const optional = optionalBoolean(step["optional"], ["steps", index, "optional"], ctx) ?? false;
+		const show = readOutputs(step["show"], ["steps", index, "show"], ctx);
+
+		// Nothing to look at, so nothing to decide from: the gate would open every
+		// time and could only ever be approved blind.
+		if (optional && show.length === 0) {
+			throw new PipelineError(
+				`${ctx.at(["steps", index, "optional"])}: gate "${id}" is optional but shows nothing. ` +
+					`An optional gate is skipped when its "show:" artifacts are absent, so with no ` +
+					`artifacts it would never be skipped and never have anything to justify stopping for.`,
+			);
+		}
+
 		const gate: GateStepSpec = {
 			kind: "gate",
 			id,
 			title,
-			show: readOutputs(step["show"], ["steps", index, "show"], ctx),
+			show,
 			outputs,
 			...(onReject !== undefined ? { onReject } : {}),
 			...(select !== undefined ? { select } : {}),
+			...(optional ? { optional } : {}),
 		};
 		return gate;
 	}

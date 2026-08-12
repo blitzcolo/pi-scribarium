@@ -347,6 +347,20 @@ steps:
 			parsePipeline("steps:\n  - id: g\n    gate: Just checking\n", "/p.yaml", registry),
 		).not.toThrow();
 	});
+
+	// An optional gate is skipped exactly when its artifacts are absent, so one
+	// with no artifacts can never be skipped and never has anything to justify
+	// stopping for. Silently, both ways: it reads as a gate that will stay out of
+	// the way and behaves as one that always blocks.
+	it("rejects an optional gate that shows nothing", () => {
+		expect(() =>
+			parsePipeline(
+				"steps:\n  - id: g\n    gate: Just checking\n    optional: true\n",
+				"/p.yaml",
+				registry,
+			),
+		).toThrow(/optional but shows nothing/);
+	});
 });
 
 /**
@@ -493,5 +507,65 @@ describe("gate select", () => {
 		await expect(execute(script, first.final, first.scripted)).rejects.toThrow(
 			/does not declare "select:"/,
 		);
+	});
+});
+
+const OPTIONAL_GATE_PIPELINE = `
+steps:
+  - id: outline
+    agent: outliner
+    input: Draft the outline.
+    output: outline/outline.md
+  - id: supply-extras
+    gate: Supply what could not be fetched
+    optional: true
+    show: outline/missing.md
+  - id: write
+    agent: writer
+    input: Write from \${steps.outline.outputs}.
+    output: draft/paper.md
+`;
+
+/**
+ * A gate that only sometimes has a decision to offer.
+ *
+ * The shipped case is supplying PDFs that failed to download: worth stopping for
+ * when some failed, and pure friction when none did. Stopping regardless would
+ * mean an unattended run halting after every clean fetch — in file mode an exit
+ * 10 and an approve-and-resume cycle to answer a question with no material
+ * behind it.
+ */
+describe("optional gates", () => {
+	it("is skipped when the artifact was never written", async () => {
+		const { final } = await execute(scribe(), undefined, undefined, OPTIONAL_GATE_PIPELINE);
+
+		expect(final.status).toBe("completed");
+		expect(final.steps["supply-extras"]?.status).toBe("skipped");
+		// Skipping is not stopping: everything downstream still ran.
+		expect(final.steps["write"]?.status).toBe("completed");
+	});
+
+	// The builtin deletes its list rather than emptying it, but an empty file is
+	// the same absence of anything to decide about.
+	it("is skipped when the artifact is empty", async () => {
+		fs.mkdirSync(path.join(workspace, "outline"), { recursive: true });
+		fs.writeFileSync(path.join(workspace, "outline", "missing.md"), "");
+
+		const { final } = await execute(scribe(), undefined, undefined, OPTIONAL_GATE_PIPELINE);
+
+		expect(final.steps["supply-extras"]?.status).toBe("skipped");
+		expect(final.status).toBe("completed");
+	});
+
+	it("stops as any other gate would once there is something to show", async () => {
+		fs.mkdirSync(path.join(workspace, "outline"), { recursive: true });
+		fs.writeFileSync(path.join(workspace, "outline", "missing.md"), "# 3 papers still missing\n");
+
+		const { final } = await execute(scribe(), undefined, undefined, OPTIONAL_GATE_PIPELINE);
+
+		expect(final.status).toBe("awaiting_gate");
+		expect(final.steps["supply-extras"]?.status).toBe("awaiting");
+		// And the run did not run ahead of the decision.
+		expect(final.steps["write"]).toBeUndefined();
 	});
 });

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runBuiltin, type BuiltinContext } from "../../src/pipeline/builtins.js";
 import type { BuiltinName, BuiltinStepSpec } from "../../src/pipeline/schema.js";
 import type { PaperRecord } from "../../src/search/types.js";
+import { bodyPage, minimalPdf } from "../helpers/minimal-pdf.js";
 import { offlineFetcher, scriptedFetcher, type ScriptedRoute } from "../helpers/scripted-fetch.js";
 
 let workspace: string;
@@ -583,5 +584,113 @@ describe("collate-evidence builtin", () => {
 
 		expect(result.ok).toBe(false);
 		expect(result.error).toContain("nope.json");
+	});
+});
+
+/**
+ * Full text a human fetched by hand.
+ *
+ * A paywalled paper enters the corpus as an abstract-only stub, and that
+ * weakness is disclosed all the way into the verdict's evidence counts. Supplying
+ * the PDF has to actually undo it — otherwise the run keeps reporting the paper
+ * as unread while an analyst reads it in full.
+ */
+describe("fetch-papers: supplying a missing full text", () => {
+	const PAYWALLED = () =>
+		results([
+			paper({
+				id: "closed-2022-b",
+				title: "A Closed Paper",
+				abstract: "We show that the thing works under conditions.",
+				doi: "10.1/closed",
+				year: 2022,
+				points: ["ip-1"],
+			}),
+		]);
+
+	function fetchStep(): BuiltinStepSpec {
+		return step("fetch-papers", { results: "results.json", dir: "refs", missing: "missing.md" });
+	}
+
+	function statusOf(id: string): string | undefined {
+		return readJson<{ papers: Array<{ id: string; status: string }> }>(
+			"refs/manifest.json",
+		).papers.find((entry) => entry.id === id)?.status;
+	}
+
+	it("lists what is missing, and deletes the list once nothing is", async () => {
+		write("results.json", PAYWALLED());
+		await runBuiltin(fetchStep(), context());
+
+		const list = read("missing.md");
+		expect(list).toContain("A Closed Paper");
+		expect(list).toContain("https://doi.org/10.1/closed");
+		// The exact filename, because the id is a slug nobody would guess, and a
+		// near-miss fails silently: the paper simply stays missing.
+		expect(list).toContain("refs/closed-2022-b.pdf");
+		expect(list).toContain("refs/inbox/");
+
+		fs.writeFileSync(
+			path.join(workspace, "refs", "closed-2022-b.pdf"),
+			minimalPdf([bodyPage("supplied by hand")]),
+		);
+		await runBuiltin(fetchStep(), context());
+
+		// Deleted rather than emptied: an optional gate keys off the artifact being
+		// absent, and a stale list would reopen it forever.
+		expect(fs.existsSync(path.join(workspace, "missing.md"))).toBe(false);
+	});
+
+	it("re-reads the status from disk and retires the superseded stub", async () => {
+		write("results.json", PAYWALLED());
+		await runBuiltin(fetchStep(), context());
+		expect(statusOf("closed-2022-b")).toBe("abstract-only");
+
+		fs.writeFileSync(
+			path.join(workspace, "refs", "closed-2022-b.pdf"),
+			minimalPdf([bodyPage("supplied by hand")]),
+		);
+		await runBuiltin(fetchStep(), context());
+
+		// Carrying the recorded verdict forward instead would tell the analyst that
+		// the paper it is about to read in full was never read.
+		expect(statusOf("closed-2022-b")).toBe("downloaded");
+		// Left in place, ingest reads both: one paper twice in one corpus, one copy
+		// stamped as weaker evidence.
+		expect(fs.existsSync(path.join(workspace, "refs", "closed-2022-b.md"))).toBe(false);
+	});
+
+	it("adopts an inbox PDF by the DOI on its first page, whatever it is named", async () => {
+		write("results.json", PAYWALLED());
+		await runBuiltin(fetchStep(), context());
+
+		const inbox = path.join(workspace, "refs", "inbox");
+		fs.mkdirSync(inbox, { recursive: true });
+		fs.writeFileSync(
+			path.join(inbox, "1-s2.0-S0924271618300741-main.pdf"),
+			minimalPdf([bodyPage("10.1/closed")]),
+		);
+		await runBuiltin(fetchStep(), context());
+
+		expect(fs.existsSync(path.join(workspace, "refs", "closed-2022-b.pdf"))).toBe(true);
+		expect(fs.readdirSync(inbox)).toEqual([]);
+		expect(statusOf("closed-2022-b")).toBe("downloaded");
+		expect(fs.existsSync(path.join(workspace, "missing.md"))).toBe(false);
+	});
+
+	it("leaves a PDF it cannot identify in the inbox rather than guessing", async () => {
+		write("results.json", PAYWALLED());
+		await runBuiltin(fetchStep(), context());
+
+		const inbox = path.join(workspace, "refs", "inbox");
+		fs.mkdirSync(inbox, { recursive: true });
+		fs.writeFileSync(path.join(inbox, "something-else.pdf"), minimalPdf([bodyPage("10.9/other")]));
+		await runBuiltin(fetchStep(), context());
+
+		// Filing it under the wrong id would put someone else's paper in the corpus
+		// under a name nobody re-checks.
+		expect(fs.readdirSync(inbox)).toEqual(["something-else.pdf"]);
+		expect(statusOf("closed-2022-b")).toBe("abstract-only");
+		expect(fs.existsSync(path.join(workspace, "missing.md"))).toBe(true);
 	});
 });

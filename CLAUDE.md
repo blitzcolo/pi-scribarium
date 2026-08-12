@@ -438,6 +438,21 @@ appears in it.
   evidence stays labelled all the way into the verdict's disclosed counts.
 - **Downloads are validated as PDFs** by magic bytes and a size floor: publishers answer a PDF
   request with an HTML consent page and HTTP 200, and saved blindly that reaches ingest as a paper.
+- **A human can supply what the network refused, and is matched by DOI rather than by filename.**
+  PDFs dropped in `refs/inbox/` keep whatever name the publisher gave them; adoption reads each
+  file's *first page* and moves it to `refs/<id>.pdf` when it carries exactly one missing paper's
+  DOI. First page only, because a DOI in a bibliography belongs to someone else's paper; exactly
+  one, because filing the wrong paper under an id nobody re-checks is worse than asking again —
+  the rule `--keep` follows for an unrecognised id. Requiring the exact `<id>.pdf` instead would
+  mean renaming dozens of files to sixty-character slugs, where a typo fails silently by leaving
+  the paper missing. That path still works and is the documented fallback.
+  - **Status is re-derived from what is on disk, never carried forward from the manifest**, and a
+    stub the new PDF supersedes is deleted. Both were real bugs waiting: the recorded
+    `abstract-only` would have followed a hand-supplied paper into the evidence packets and the
+    verdict's disclosed counts, and the leftover `<id>.md` would have put one paper in the corpus
+    twice, one copy stamped as weaker evidence. Ingest reads every `.md` directly inside `refs/`,
+    which is also why the missing list is written *outside* it — and why `refs/inbox/` and
+    `refs/meta/` are safe: subdirectories are not read.
 - **The HTTP seam is an injectable `Fetcher`** threaded `RunPipelineOptions` → `BuiltinContext` and
   → `RunStageOptions.customToolContext`. `test/helpers/scripted-fetch.ts` serves fixtures and
   records every URL, which is what makes "this step made no request" assertable.
@@ -475,6 +490,17 @@ second round — because everything downstream is priced per candidate.
   asleep.
 - **A decision is consumed once.** Leaving it in place would re-reject the
   regenerated work forever without ever asking again.
+- **`optional: true` skips a gate whose `show:` artifacts are all absent or
+  empty**, for gates that only sometimes have a decision to offer. `explore`'s
+  `supply-missing` is the case: worth stopping for when some full texts failed to
+  download, pure friction when none did — and in file mode that friction is an
+  exit 10 plus an approve-and-resume cycle to answer a question with no material
+  behind it. It is the same "a skipped step is a deliberate outcome, not an
+  error" rule an optional fan-out follows. The builtin therefore **deletes** its
+  list rather than emptying it: the gate keys off absence, and a stale list would
+  reopen it forever. An optional gate with no `show:` at all is refused at load
+  time — it can never be skipped, so it reads as unobtrusive and behaves as
+  blocking.
 - **Keeping a subset is a third answer, not a soft rejection.** `select:` names a
   JSON array the reviewer may cut down; `approve --keep a,b` deletes the rest and
   proceeds. Rejection regenerates the whole list, which is the wrong tool when

@@ -119,6 +119,35 @@ steps:
     with:
       results: explore/${vars.name_slug}/results-round1.json
       dir: explore/${vars.name_slug}/refs
+      # Outside refs/ on purpose. Ingest reads every .md sitting directly in that
+      # directory — the abstract-only stubs are .md — so a list left inside it
+      # would enter the corpus as a paper. Subdirectories are not read, which is
+      # why refs/inbox/ and refs/meta/ are safe where they are.
+      missing: explore/${vars.name_slug}/missing-round1.md
+
+  # Skipped outright when every full text came down, so a clean fetch never stops
+  # the run. When some did not, this is the one cheap moment to supply them:
+  # everything downstream is priced per paper, and a paper that arrives as an
+  # abstract-only stub stays weaker evidence all the way into the verdict's
+  # disclosed counts.
+  #
+  # No on_reject. There is nothing to regenerate — the list is a report of what
+  # the network refused, and asking for it again would produce the same list.
+  - id: supply-missing
+    gate: Supply full texts that could not be downloaded, or approve to continue without them
+    optional: true
+    show: explore/${vars.name_slug}/missing-round1.md
+
+  # The same builtin against the same directory, which makes it nearly free: every
+  # paper already on disk is skipped and no request is made. It is here to take in
+  # whatever was dropped into refs/inbox/, retire the stubs those PDFs supersede,
+  # and rewrite the list to match what is now on disk.
+  - id: adopt-round1
+    builtin: fetch-papers
+    with:
+      results: explore/${vars.name_slug}/results-round1.json
+      dir: explore/${vars.name_slug}/refs
+      missing: explore/${vars.name_slug}/missing-round1.md
 
   - id: ingest-refs
     builtin: ingest
@@ -188,6 +217,22 @@ steps:
     with:
       results: explore/${vars.name_slug}/results-round2.json
       dir: explore/${vars.name_slug}/refs
+      # Its own file rather than rewriting round one's. Each list reports what
+      # that round's fetch left missing, and sharing one path would silently drop
+      # round one's unresolved papers off it — which reads as "resolved".
+      missing: explore/${vars.name_slug}/missing-round2.md
+
+  - id: supply-missing-2
+    gate: Supply full texts for the second round, or approve to continue without them
+    optional: true
+    show: explore/${vars.name_slug}/missing-round2.md
+
+  - id: adopt-round2
+    builtin: fetch-papers
+    with:
+      results: explore/${vars.name_slug}/results-round2.json
+      dir: explore/${vars.name_slug}/refs
+      missing: explore/${vars.name_slug}/missing-round2.md
 
   - id: ingest-refs-2
     builtin: ingest

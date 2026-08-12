@@ -439,6 +439,21 @@ total, shared round-robin across every surviving candidate's queries, so cutting
 nine candidates to three roughly triples the corpus behind each one that is left.
 Keeping a candidate you do not care about is not free.
 
+**Supplying full texts that would not download.** Many publishers answer an
+automated PDF request with a 403 or a consent page. Those papers still enter the
+corpus, as abstract-only stubs, and that weakness is disclosed all the way into
+the verdict — but if you have access, this is the cheap moment to fix it. After
+each fetch, `explore/<name>/missing-round<N>.md` lists what is missing with a DOI
+link for each, and the run pauses at a gate showing it. Download whatever you
+want and drop the files into `explore/<name>/refs/inbox/`, **keeping whatever
+filename the publisher gave them** — each is matched to its paper by the DOI
+printed on its own first page and moved into place. Anything unmatched is left in
+the inbox and reported, and can be placed by hand as `refs/<id>.pdf`.
+
+Nothing here is required: approving without supplying anything continues with the
+evidence as it stands. And when every full text downloaded, the gate does not
+appear at all — so an unattended run is never held up by it.
+
 **Searching is English-only.** arXiv, Semantic Scholar and OpenAlex index
 English-language literature, so the agents translate your direction into the
 field's own terminology. A non-English query is refused outright rather than

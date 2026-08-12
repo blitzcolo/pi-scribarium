@@ -52,6 +52,10 @@ export interface FetchPapersOptions {
 	dir: string;
 	fetcher: Fetcher;
 	minPdfBytes: number;
+	/** Absolute path for the list of papers still without full text. */
+	missingList?: string;
+	/** How to spell `dir` in that list, which a human reads. */
+	dirLabel?: string;
 	onProgress?: (message: string) => void;
 	signal?: AbortSignal;
 }
@@ -62,7 +66,14 @@ export interface FetchPapersResult {
 	abstractOnly: number;
 	failed: number;
 	skipped: number;
+	/** Hand-supplied PDFs taken in from `inbox/` this run. */
+	adopted: number;
+	/** Papers that still have no full text. */
+	missing: number;
 }
+
+/** Where a human drops PDFs they fetched themselves. */
+const INBOX = "inbox";
 
 export async function fetchPapers(options: FetchPapersOptions): Promise<FetchPapersResult> {
 	const metaDir = path.join(options.dir, "meta");
@@ -70,6 +81,10 @@ export async function fetchPapers(options: FetchPapersOptions): Promise<FetchPap
 
 	const existing = readManifest(options.dir);
 	const entries = new Map(existing.papers.map((entry) => [entry.id, entry]));
+
+	// Before anything is fetched, so a hand-supplied PDF is simply a paper that is
+	// already present by the time the loop reaches it.
+	const adopted = await adoptInbox(options);
 
 	const total = options.papers.length;
 	const startedAt = Date.now();
@@ -89,19 +104,26 @@ export async function fetchPapers(options: FetchPapersOptions): Promise<FetchPap
 
 		const already = findExisting(options.dir, paper.id);
 		if (already !== undefined) {
-			// Carry the earlier verdict forward rather than recomputing it: the file
-			// on disk is the evidence, and re-deriving `abstract-only` from a stub
-			// would need to parse it back.
+			// The status is derived from what is on disk, never carried forward from
+			// the manifest. It used to be carried forward, which was defensible while
+			// files only ever appeared by download — but a human can now drop a PDF in
+			// for a paper an earlier run recorded as abstract-only, and the stale
+			// verdict would have followed it all the way into the evidence packets and
+			// the verdict's disclosed counts. The analyst would then be told the paper
+			// it is reading in full was never read.
 			const previous = entries.get(paper.id);
+			const isPdf = already.endsWith(".pdf");
+			const bytes = isPdf ? sizeOf(options.dir, already) : undefined;
+			// The stub is superseded, and left in place ingest would extract both: the
+			// same paper twice in one corpus, one copy stamped as weaker evidence.
+			if (isPdf) retireStub(options.dir, paper.id);
 			entries.set(paper.id, {
-				...(previous ?? {
-					id: paper.id,
-					status: already.endsWith(".pdf") ? "downloaded" : "abstract-only",
-					title: paper.title,
-					points: paper.points,
-				}),
+				id: paper.id,
+				title: paper.title,
+				status: isPdf ? "downloaded" : "abstract-only",
 				points: [...new Set([...(previous?.points ?? []), ...paper.points])],
 				file: already,
+				...(bytes === undefined ? {} : { bytes }),
 			});
 			options.onProgress?.(`  ${where} skipped   ${paper.id} (already fetched)`);
 			continue;
@@ -126,7 +148,179 @@ export async function fetchPapers(options: FetchPapersOptions): Promise<FetchPap
 		abstractOnly: count(manifest, "abstract-only"),
 		failed: count(manifest, "failed"),
 		skipped: count(manifest, "skipped"),
+		adopted,
+		missing: writeMissingList(options, entries),
 	};
+}
+
+/**
+ * Take in PDFs a human fetched by hand.
+ *
+ * Matching is on the DOI printed on the paper's own first page, so the file can
+ * keep whatever name the publisher gave it — `1-s2.0-S0924271618300741-main.pdf`
+ * and the like. Requiring the exact `<id>.pdf` instead would mean renaming
+ * dozens of files to sixty-character slugs, and a typo there fails silently: the
+ * paper simply stays missing.
+ *
+ * Only the first page is searched. A DOI in a bibliography is a reference to
+ * someone else's work, and matching on it would file the wrong paper under an
+ * id nobody will re-check. For the same reason a file matching more than one
+ * missing paper is left alone and reported rather than guessed at — the rule the
+ * gate's own `--keep` follows for an unrecognised id.
+ */
+async function adoptInbox(options: FetchPapersOptions): Promise<number> {
+	const inbox = path.join(options.dir, INBOX);
+	let names: string[];
+	try {
+		names = fs.readdirSync(inbox).filter((name) => name.toLowerCase().endsWith(".pdf"));
+	} catch {
+		// No inbox at all is the ordinary case, not an error.
+		return 0;
+	}
+	if (names.length === 0) return 0;
+
+	// Lazy, like ingest's own use of it: unpdf carries a pdf.js build, and a run
+	// with an empty inbox must not pay for it.
+	const { extractPdfPages } = await import("../ingest/pdf.js");
+
+	const claimable = new Map<string, PaperRecord>();
+	for (const paper of options.papers) {
+		if (fs.existsSync(path.join(options.dir, `${paper.id}.pdf`))) continue;
+		if (identifiers(paper).length > 0) claimable.set(paper.id, paper);
+	}
+
+	let adopted = 0;
+	for (const name of names.sort()) {
+		const from = path.join(inbox, name);
+		let firstPage: string;
+		try {
+			firstPage = squash((await extractPdfPages(from))[0] ?? "");
+		} catch (cause) {
+			options.onProgress?.(`  inbox     ${name}: not a readable PDF (${String(cause)})`);
+			continue;
+		}
+
+		const hits = [...claimable.values()].filter((paper) =>
+			identifiers(paper).some((identifier) => firstPage.includes(identifier)),
+		);
+		if (hits.length !== 1) {
+			const why =
+				hits.length === 0
+					? "no DOI from the missing list on its first page"
+					: `first page carries ${hits.length} of the missing DOIs`;
+			options.onProgress?.(`  inbox     ${name}: ${why} — left in ${INBOX}/`);
+			continue;
+		}
+
+		const paper = hits[0] as PaperRecord;
+		fs.renameSync(from, path.join(options.dir, `${paper.id}.pdf`));
+		claimable.delete(paper.id);
+		adopted += 1;
+		options.onProgress?.(`  inbox     ${name} -> ${paper.id}.pdf`);
+	}
+	return adopted;
+}
+
+/** Whitespace and case carry nothing in a DOI, and PDF extraction mangles both. */
+function squash(text: string): string {
+	return text.replace(/\s+/g, "").toLowerCase();
+}
+
+/** Identifiers distinctive enough that finding one on a page identifies the paper. */
+function identifiers(paper: PaperRecord): string[] {
+	const out: string[] = [];
+	const doi = paper.doi?.replace(/^https?:\/\/(dx\.)?doi\.org\//i, "").trim();
+	if (doi !== undefined && doi !== "") out.push(squash(doi));
+	const arxiv = paper.arxivId?.trim();
+	if (arxiv !== undefined && arxiv !== "") out.push(squash(`arXiv:${arxiv}`));
+	// A short string would collide with running text; a real DOI is far longer.
+	return out.filter((value) => value.length >= 10);
+}
+
+/**
+ * List what is still missing, for a human to fill in — or to ignore.
+ *
+ * Deleted when nothing is missing. A list left over from an earlier attempt
+ * would reopen the gate on every later run, asking for papers already on disk.
+ */
+function writeMissingList(
+	options: FetchPapersOptions,
+	entries: ReadonlyMap<string, FetchedPaper>,
+): number {
+	const missing = options.papers.filter((paper) => {
+		const entry = entries.get(paper.id);
+		return entry !== undefined && entry.status !== "downloaded";
+	});
+
+	const target = options.missingList;
+	if (target === undefined) return missing.length;
+	if (missing.length === 0) {
+		fs.rmSync(target, { force: true });
+		return 0;
+	}
+
+	const dir = options.dirLabel ?? path.basename(options.dir);
+	const lines = [
+		`# Full text missing for ${missing.length} of ${options.papers.length} papers`,
+		"",
+		"These reached the corpus as abstract-only stubs, or not at all. The analysis",
+		"will run without their full text, and the verdict discloses how much of its",
+		"evidence was abstract-only.",
+		"",
+		"**Supplying one is optional.** Approving without doing anything continues the",
+		"run with the evidence as it stands.",
+		"",
+		"To supply a paper, download the PDF and drop it into:",
+		"",
+		`    ${dir}/${INBOX}/`,
+		"",
+		"Keep whatever filename the publisher gave it. Each file is matched to its",
+		"paper by the DOI printed on its own first page and moved into place. Anything",
+		"that cannot be matched is left in the inbox and reported, and can be placed by",
+		`hand as \`${dir}/<id>.pdf\` — that path always works.`,
+		"",
+		"---",
+		"",
+	];
+
+	for (const [index, paper] of missing.entries()) {
+		const entry = entries.get(paper.id) as FetchedPaper;
+		const facts = [
+			paper.year === undefined ? undefined : String(paper.year),
+			paper.venue,
+			entry.status === "failed" ? "no abstract either" : "abstract only",
+		]
+			.filter((part) => part !== undefined && part !== "")
+			.join(" · ");
+
+		lines.push(
+			`## ${index + 1}. ${paper.title}`,
+			"",
+			`- ${facts}`,
+			...(entry.error === undefined ? [] : [`- why: ${entry.error}`]),
+			...(paper.doi === undefined ? [] : [`- https://doi.org/${paper.doi}`]),
+			...(paper.arxivId === undefined ? [] : [`- https://arxiv.org/abs/${paper.arxivId}`]),
+			`- by hand: \`${dir}/${paper.id}.pdf\``,
+			"",
+		);
+	}
+
+	fs.mkdirSync(path.dirname(target), { recursive: true });
+	fs.writeFileSync(target, `${lines.join("\n")}\n`, "utf-8");
+	return missing.length;
+}
+
+/** Remove an abstract-only stub that a real PDF has replaced. */
+function retireStub(dir: string, id: string): void {
+	fs.rmSync(path.join(dir, `${id}.md`), { force: true });
+}
+
+function sizeOf(dir: string, file: string): number | undefined {
+	try {
+		return fs.statSync(path.join(dir, file)).size;
+	} catch {
+		return undefined;
+	}
 }
 
 async function fetchOne(paper: PaperRecord, options: FetchPapersOptions): Promise<FetchedPaper> {

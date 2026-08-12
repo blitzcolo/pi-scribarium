@@ -8,7 +8,7 @@ import { AgentRegistry } from "../../src/agents/registry.js";
 import { commandInit } from "../../src/cli/commands/init.js";
 import { resolvePipelinePath } from "../../src/cli/commands/run.js";
 import { loadPipeline } from "../../src/pipeline/load.js";
-import type { BuiltinStepSpec, PipelineSpec } from "../../src/pipeline/schema.js";
+import type { BuiltinStepSpec, GateStepSpec, PipelineSpec } from "../../src/pipeline/schema.js";
 
 /**
  * The shipped pipeline and the scaffolded workspace are what every user gets,
@@ -150,16 +150,61 @@ describe("the shipped explore pipeline", () => {
 		expect(spec.steps.length).toBeGreaterThan(0);
 	});
 
-	// Both gates guard spending, so their position is the design rather than a
-	// detail: candidates before the search is paid for, follow-ups before the
-	// second round is.
+	// The spending gates' position is the design rather than a detail: candidates
+	// before the search is paid for, follow-ups before the second round is. They
+	// always stop, because the decision is whether to spend at all.
 	it("gates before each of the two spending decisions", () => {
 		const order = spec.steps.map((step) => step.id);
-		const gates = spec.steps.filter((step) => step.kind === "gate").map((step) => step.id);
+		const blocking = spec.steps
+			.filter((step) => step.kind === "gate" && step.optional !== true)
+			.map((step) => step.id);
 
-		expect(gates).toEqual(["prune-candidates", "approve-round2"]);
+		expect(blocking).toEqual(["prune-candidates", "approve-round2"]);
 		expect(order.indexOf("prune-candidates")).toBeLessThan(order.indexOf("search-round1"));
 		expect(order.indexOf("approve-round2")).toBeLessThan(order.indexOf("search-round2"));
+	});
+
+	// Supplying a missing PDF is an offer, not a decision the run needs. These
+	// must be optional or an unattended run stops after every fetch to ask a
+	// question with no material behind it — in file mode at the cost of an exit 10
+	// and an approve-and-resume cycle.
+	it("offers to supply missing full texts without ever requiring it", () => {
+		const order = spec.steps.map((step) => step.id);
+		const supply = spec.steps.filter(
+			(step): step is GateStepSpec => step.kind === "gate" && step.optional === true,
+		);
+
+		expect(supply.map((step) => step.id)).toEqual(["supply-missing", "supply-missing-2"]);
+		// Nothing to regenerate: the list reports what the network refused.
+		for (const gate of supply) expect(gate.onReject).toBeUndefined();
+
+		// Each sits between the fetch that writes the list and the ingest that
+		// builds the corpus, with a second fetch after it to adopt what was
+		// supplied — later, and the papers would already have been analysed.
+		expect(order.indexOf("fetch-round1")).toBeLessThan(order.indexOf("supply-missing"));
+		expect(order.indexOf("supply-missing")).toBeLessThan(order.indexOf("adopt-round1"));
+		expect(order.indexOf("adopt-round1")).toBeLessThan(order.indexOf("ingest-refs"));
+		expect(order.indexOf("fetch-round2")).toBeLessThan(order.indexOf("supply-missing-2"));
+		expect(order.indexOf("supply-missing-2")).toBeLessThan(order.indexOf("adopt-round2"));
+		expect(order.indexOf("adopt-round2")).toBeLessThan(order.indexOf("ingest-refs-2"));
+	});
+
+	// Ingest reads every .md directly inside the refs directory — the abstract-only
+	// stubs are .md — so a list written in there would enter the corpus as though
+	// it were a paper. Subdirectories are not read, which is what makes
+	// refs/inbox/ and refs/meta/ safe where they are.
+	it("keeps the missing-PDF lists out of the directory ingest reads", () => {
+		const fetches = spec.steps.filter(
+			(step): step is BuiltinStepSpec => step.kind === "builtin" && step.run === "fetch-papers",
+		);
+
+		expect(fetches.length).toBeGreaterThan(0);
+		for (const step of fetches) {
+			const missing = String(step.with["missing"] ?? "");
+			const dir = String(step.with["dir"] ?? "");
+			expect(missing).not.toBe("");
+			expect(missing.startsWith(`${dir}/`)).toBe(false);
+		}
 	});
 
 	// The candidate list is the cheapest thing to redo; the collation is

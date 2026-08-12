@@ -143,6 +143,10 @@ async function runFetchPapers(step: BuiltinStepSpec, ctx: BuiltinContext): Promi
 	const resultsPath = stringOption(step, "results", "results.json");
 	const dir = stringOption(step, "dir", "refs");
 	const minPdfBytes = numberOption(step, "min_pdf_bytes", 10_000);
+	// Optional: without it the step simply fetches, as it always did. With it the
+	// list becomes the artifact a gate shows, which is why it is deleted rather
+	// than emptied when nothing is missing — an optional gate keys off absence.
+	const missing = stringOption(step, "missing", "");
 
 	let results: ResultsFile;
 	try {
@@ -156,12 +160,15 @@ async function runFetchPapers(step: BuiltinStepSpec, ctx: BuiltinContext): Promi
 		dir: path.resolve(ctx.workspace, dir),
 		fetcher: fetcherFor(ctx),
 		minPdfBytes,
+		dirLabel: dir,
+		...(missing === "" ? {} : { missingList: ctx.resolveOutput(missing) }),
 		...(ctx.onProgress !== undefined ? { onProgress: ctx.onProgress } : {}),
 	});
 
 	const summary =
 		`${outcome.downloaded} downloaded, ${outcome.abstractOnly} abstract-only, ` +
-		`${outcome.failed} unavailable -> ${dir}/`;
+		`${outcome.failed} unavailable -> ${dir}/` +
+		(outcome.adopted === 0 ? "" : `; adopted ${outcome.adopted} from ${dir}/inbox/`);
 
 	// Papers that reached neither full text nor an abstract are surfaced as a
 	// warning: they are gaps in the evidence, and a run that hides them lets a

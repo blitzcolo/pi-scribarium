@@ -265,6 +265,27 @@ async function executeGate(
 		return { path: relative, absolutePath, bytes, exists };
 	});
 
+	// An optional gate whose artifacts are absent has nothing to decide about, and
+	// stopping anyway would mean asking a question with no material behind it —
+	// in file mode at the cost of an exit 10 and an approve-and-resume cycle.
+	// Checked before the step is marked awaiting, so a run that never needed the
+	// gate carries no trace of having stopped at one.
+	if (step.optional === true && artifacts.every((artifact) => !artifact.exists || artifact.bytes === 0)) {
+		const skipped: StepState = state.steps[step.id] ?? {
+			type: "gate",
+			status: "skipped",
+			attempts: 0,
+			outputs: [],
+		};
+		skipped.type = "gate";
+		skipped.status = "skipped";
+		state.steps[step.id] = skipped;
+		store.save(state);
+		onEvent?.({ type: "log", message: `skipping optional gate ${step.id}: nothing to review` });
+		log.append("gate_skipped", { stepId: step.id, reason: "no artifacts to review" });
+		return { kind: "proceed" };
+	}
+
 	const stepState: StepState = state.steps[step.id] ?? {
 		type: "gate",
 		status: "awaiting",
