@@ -244,7 +244,9 @@ function script(): { run: Script; analysed: string[] } {
 	return { run, analysed };
 }
 
-async function run(options: { autoApprove?: boolean; state?: RunState } = {}) {
+async function run(
+	options: { autoApprove?: boolean; state?: RunState; routes?: readonly ScriptedRoute[] } = {},
+) {
 	const source = fs.readFileSync(path.join(shippedPipelinesDir(), "explore.yaml"), "utf-8");
 	const spec = loadPipeline(path.join(shippedPipelinesDir(), "explore.yaml"), registry, {
 		name: NAME,
@@ -254,11 +256,28 @@ async function run(options: { autoApprove?: boolean; state?: RunState } = {}) {
 	});
 	const driver = script();
 	const scripted = await createScriptedRuntime(agentDir, driver.run);
-	const { fetch, requests } = scriptedFetcher(ROUTES);
+	const { fetch, requests } = scriptedFetcher(options.routes ?? ROUTES);
 
 	const state =
 		options.state ??
 		RunStateStore.create(layout, initialRunState({ spec, layout, pipelineHash: hashPipeline(source) }));
+
+	/**
+	 * Peak simultaneously-running sessions, per step.
+	 *
+	 * An item is in flight from its first stage event until the fan-out reports it
+	 * settled. Counting through the public event stream rather than by
+	 * instrumenting the pool measures what a user is actually billed for.
+	 */
+	const active = new Map<string, Set<string>>();
+	const peak = new Map<string, number>();
+	const mark = (stepId: string, itemId: string, starting: boolean): void => {
+		const live = active.get(stepId) ?? new Set<string>();
+		active.set(stepId, live);
+		if (starting) live.add(itemId);
+		else live.delete(itemId);
+		peak.set(stepId, Math.max(peak.get(stepId) ?? 0, live.size));
+	};
 
 	const final = await runPipeline({
 		spec,
@@ -269,9 +288,15 @@ async function run(options: { autoApprove?: boolean; state?: RunState } = {}) {
 		agentDir,
 		fetcher: fetch,
 		gate: async () => ({ kind: "approve" }),
+		onEvent: (event) => {
+			if (event.type === "stage" && event.itemId !== undefined) {
+				mark(event.stepId, event.itemId, true);
+			}
+			if (event.type === "fanout_progress") mark(event.stepId, event.itemId, false);
+		},
 	});
 
-	return { final, requests, scripted, analysed: driver.analysed };
+	return { final, requests, scripted, analysed: driver.analysed, peak };
 }
 
 const read = (relative: string) => fs.readFileSync(path.join(workspace, relative), "utf-8");
@@ -354,6 +379,41 @@ describe("the shipped explore pipeline", () => {
 		for (const url of requests) {
 			expect(url).toMatch(/arxiv\.org|semanticscholar\.org|openalex\.org|example\.org/);
 		}
+	});
+
+	// A hundred papers must not mean a hundred live sessions. The pool bounds it
+	// at the step's `parallel:`, under a hard ceiling of 8 — otherwise a large
+	// corpus would open sessions until the provider rate-limited the run into a
+	// retry storm, and bill for all of them.
+	it("runs a bounded number of sessions however large the corpus", async () => {
+		const many = Array.from({ length: 24 }, (_, index) => ({
+			paperId: `bulk-${index}`,
+			title: `Bulk Paper Number ${index}`,
+			year: 2020,
+			venue: "Venue",
+			citationCount: 100 - index,
+			// Abstract-only, so the run costs no downloads and still analyses 24 papers.
+			abstract: `Abstract of paper ${index}.`,
+			externalIds: { DOI: `10.9/bulk-${index}` },
+			authors: [{ name: `Author${index} Surname${index}` }],
+		}));
+
+		const { final, peak } = await run({
+			routes: [
+				{ match: "export.arxiv.org", body: EMPTY_ARXIV },
+				{ match: "api.openalex.org", body: EMPTY_OPENALEX },
+				{ match: "api.semanticscholar.org", body: s2(many) },
+			],
+		});
+
+		expect(final.status).toBe("completed");
+		expect(Object.keys(final.steps["analyze"]?.items ?? {})).toHaveLength(24);
+
+		// explore.yaml asks for 4 in the analysis fan-outs and 3 in the judging one.
+		expect(peak.get("analyze")).toBeLessThanOrEqual(4);
+		expect(peak.get("judge")).toBeLessThanOrEqual(3);
+		// And it really did run them concurrently, rather than passing by serialising.
+		expect(peak.get("analyze")).toBeGreaterThan(1);
 	});
 
 	it("stops at the first gate when the reviewer defers", async () => {
