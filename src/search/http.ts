@@ -9,7 +9,32 @@
  * real.
  */
 
+import { VERSION } from "../version.js";
+
 export type Fetcher = (url: string, init?: RequestInit) => Promise<Response>;
+
+/**
+ * Hosts that asked to be told who is calling, and are therefore the only ones
+ * told.
+ *
+ * OpenAlex and Crossref-style APIs offer a higher rate limit to clients that
+ * identify themselves, and arXiv asks API users to do the same. None of that
+ * extends to the publisher servers a PDF is downloaded from: they did not ask,
+ * have no use for it, and a contact address sent to several dozen third parties
+ * is not what someone setting one variable expects to happen.
+ *
+ * Deliberately not including `arxiv.org` — the PDF host — even though it is the
+ * same organisation as `export.arxiv.org`. The rule is "the endpoint that asked",
+ * and keeping it that literal is what makes it easy to check.
+ */
+const CONTACT_HOSTS: ReadonlySet<string> = new Set([
+	"api.openalex.org",
+	"api.semanticscholar.org",
+	"export.arxiv.org",
+]);
+
+/** The one host the Semantic Scholar credential may ever be sent to. */
+const SEMANTIC_SCHOLAR_HOST = "api.semanticscholar.org";
 
 /**
  * Minimum spacing between requests to one host.
@@ -88,7 +113,6 @@ export function createPoliteFetcher(options: PoliteFetcherOptions = {}): Fetcher
 	const maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
 	const sleep = options.sleep ?? defaultSleep;
 	const intervals = options.intervals ?? HOST_INTERVALS;
-	const userAgent = options.userAgent ?? defaultUserAgent();
 
 	/** Tail of the request chain per host; awaiting it is waiting your turn. */
 	const queues = new Map<string, Promise<void>>();
@@ -109,7 +133,7 @@ export function createPoliteFetcher(options: PoliteFetcherOptions = {}): Fetcher
 		await previous;
 
 		try {
-			return await attempt(url, init);
+			return await attempt(url, host, init);
 		} finally {
 			// Space the *next* request from the end of this one rather than sleeping
 			// before each: back-to-back small requests are what a host notices.
@@ -117,7 +141,7 @@ export function createPoliteFetcher(options: PoliteFetcherOptions = {}): Fetcher
 		}
 	};
 
-	async function attempt(url: string, init?: RequestInit): Promise<Response> {
+	async function attempt(url: string, host: string, init?: RequestInit): Promise<Response> {
 		let lastError: unknown;
 		/** Set when the previous response asked for a specific wait. */
 		let requestedWaitMs: number | undefined;
@@ -142,7 +166,7 @@ export function createPoliteFetcher(options: PoliteFetcherOptions = {}): Fetcher
 
 			let response: Response;
 			try {
-				response = await transport(url, withDefaults(init, userAgent));
+				response = await transport(url, withDefaults(init, host, options.userAgent));
 			} catch (cause) {
 				// Connection-level failures are worth another go; a caller that has
 				// exhausted them gets the last error as a value, not a throw.
@@ -159,13 +183,24 @@ export function createPoliteFetcher(options: PoliteFetcherOptions = {}): Fetcher
 	}
 }
 
-function withDefaults(init: RequestInit | undefined, userAgent: string): RequestInit {
+function withDefaults(
+	init: RequestInit | undefined,
+	host: string,
+	override: string | undefined,
+): RequestInit {
 	const headers = new Headers(init?.headers);
-	if (!headers.has("user-agent")) headers.set("user-agent", userAgent);
+	if (!headers.has("user-agent")) headers.set("user-agent", userAgentFor(host, override));
 	if (!headers.has("accept")) headers.set("accept", "application/json, application/atom+xml, */*");
 
-	const key = process.env["SEMANTIC_SCHOLAR_API_KEY"];
-	if (key !== undefined && key !== "" && !headers.has("x-api-key")) headers.set("x-api-key", key);
+	// Scoped to the one host that issued it. Set on every request, as it first
+	// was, the key travelled to each publisher server a PDF is downloaded from —
+	// dozens of third parties receiving a credential they never asked for and
+	// cannot be expected to protect. A leaked key is a different class of problem
+	// from a leaked contact address, so this is the narrower rule of the two.
+	if (host === SEMANTIC_SCHOLAR_HOST && !headers.has("x-api-key")) {
+		const key = env("SEMANTIC_SCHOLAR_API_KEY");
+		if (key !== undefined) headers.set("x-api-key", key);
+	}
 
 	return {
 		...init,
@@ -175,14 +210,26 @@ function withDefaults(init: RequestInit | undefined, userAgent: string): Request
 }
 
 /**
- * A contact address is what the polite pools ask for in exchange for their
- * higher rate limits, and it is how a host reaches a human when a client
- * misbehaves.
+ * `pi-scribarium/<version>`, plus a contact address for the hosts that asked.
+ *
+ * The address is what the polite pools trade a higher rate limit for, and it is
+ * how a host reaches a human when a client misbehaves. It is not a secret, but
+ * it is personal data, and it goes only to the endpoints whose published terms
+ * request it — never to a publisher's download server.
  */
-function defaultUserAgent(): string {
-	const mailto = process.env["SCRIBARIUM_MAILTO"];
-	const contact = mailto !== undefined && mailto !== "" ? ` (mailto:${mailto})` : "";
-	return `pi-scribarium/0.2.0${contact}`;
+function userAgentFor(host: string, override: string | undefined): string {
+	if (override !== undefined) return override;
+
+	const email = CONTACT_HOSTS.has(host) ? env("SCRIBARIUM_CONTACT_EMAIL") : undefined;
+	return email === undefined
+		? `pi-scribarium/${VERSION}`
+		: `pi-scribarium/${VERSION} (mailto:${email})`;
+}
+
+/** An unset variable and one set to blank or whitespace mean the same thing. */
+function env(name: string): string | undefined {
+	const value = process.env[name]?.trim();
+	return value === undefined || value === "" ? undefined : value;
 }
 
 function isRetryable(status: number): boolean {

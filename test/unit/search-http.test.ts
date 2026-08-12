@@ -8,11 +8,16 @@ const FAST = {
 	sleep: async () => {},
 };
 
-const originalKey = process.env["SEMANTIC_SCHOLAR_API_KEY"];
+/** Both variables these tests set, restored together so none leaks into another. */
+const TOUCHED = ["SEMANTIC_SCHOLAR_API_KEY", "SCRIBARIUM_CONTACT_EMAIL"] as const;
+const original = new Map(TOUCHED.map((name) => [name, process.env[name]]));
 
 afterEach(() => {
-	if (originalKey === undefined) delete process.env["SEMANTIC_SCHOLAR_API_KEY"];
-	else process.env["SEMANTIC_SCHOLAR_API_KEY"] = originalKey;
+	for (const name of TOUCHED) {
+		const value = original.get(name);
+		if (value === undefined) delete process.env[name];
+		else process.env[name] = value;
+	}
 });
 
 function counting(responses: Array<() => Response>): { fetch: Fetcher; calls: () => number } {
@@ -117,8 +122,7 @@ describe("createPoliteFetcher", () => {
 		expect(Math.max(...waits)).toBeLessThanOrEqual(60_000);
 	});
 
-	it("sends a contact-bearing user agent and the API key when one is set", async () => {
-		process.env["SEMANTIC_SCHOLAR_API_KEY"] = "secret-key";
+	it("identifies itself by name and version", async () => {
 		let seen: Headers | undefined;
 		const polite = createPoliteFetcher({
 			...FAST,
@@ -131,7 +135,94 @@ describe("createPoliteFetcher", () => {
 		await polite("https://example.org/a");
 
 		expect(seen?.get("user-agent")).toContain("pi-scribarium");
-		expect(seen?.get("x-api-key")).toBe("secret-key");
+	});
+});
+
+/**
+ * Who gets told what.
+ *
+ * Both of these were once attached to every request, so a run that downloaded a
+ * hundred PDFs handed the user's address — and their API key — to every
+ * publisher server it touched. Neither host had asked for either.
+ */
+describe("what is sent to whom", () => {
+	function capturing(): { fetch: Fetcher; headers: Map<string, Headers> } {
+		const headers = new Map<string, Headers>();
+		return {
+			headers,
+			fetch: async (url, init) => {
+				headers.set(new URL(url).host, new Headers(init?.headers));
+				return new Response("ok");
+			},
+		};
+	}
+
+	const EVERYWHERE = {
+		sleep: async () => {},
+		intervals: new Map([
+			["api.semanticscholar.org", 0],
+			["api.openalex.org", 0],
+			["export.arxiv.org", 0],
+			["arxiv.org", 0],
+			["cdn.publisher.example", 0],
+		]),
+	};
+
+	it("sends the Semantic Scholar key to Semantic Scholar and nowhere else", async () => {
+		process.env["SEMANTIC_SCHOLAR_API_KEY"] = "secret-key";
+		const { fetch, headers } = capturing();
+		const polite = createPoliteFetcher({ fetch, ...EVERYWHERE });
+
+		await polite("https://api.semanticscholar.org/graph/v1/paper/search?query=x");
+		await polite("https://cdn.publisher.example/paper.pdf");
+		await polite("https://api.openalex.org/works?search=x");
+		await polite("https://arxiv.org/pdf/2301.04567");
+
+		expect(headers.get("api.semanticscholar.org")?.get("x-api-key")).toBe("secret-key");
+		// A credential reaching a third party is a different class of problem from
+		// a contact address reaching one.
+		expect(headers.get("cdn.publisher.example")?.get("x-api-key")).toBeNull();
+		expect(headers.get("api.openalex.org")?.get("x-api-key")).toBeNull();
+		expect(headers.get("arxiv.org")?.get("x-api-key")).toBeNull();
+	});
+
+	it("offers the contact address only to the endpoints that asked for one", async () => {
+		process.env["SCRIBARIUM_CONTACT_EMAIL"] = "someone@example.org";
+		const { fetch, headers } = capturing();
+		const polite = createPoliteFetcher({ fetch, ...EVERYWHERE });
+
+		await polite("https://export.arxiv.org/api/query?search_query=x");
+		await polite("https://api.openalex.org/works?search=x");
+		await polite("https://cdn.publisher.example/paper.pdf");
+		// The same organisation as the API host, but this endpoint never asked.
+		await polite("https://arxiv.org/pdf/2301.04567");
+
+		expect(headers.get("export.arxiv.org")?.get("user-agent")).toContain("mailto:someone@");
+		expect(headers.get("api.openalex.org")?.get("user-agent")).toContain("mailto:someone@");
+		expect(headers.get("cdn.publisher.example")?.get("user-agent")).not.toContain("mailto:");
+		expect(headers.get("arxiv.org")?.get("user-agent")).not.toContain("mailto:");
+	});
+
+	it("sends no contact address when none is configured", async () => {
+		delete process.env["SCRIBARIUM_CONTACT_EMAIL"];
+		const { fetch, headers } = capturing();
+		const polite = createPoliteFetcher({ fetch, ...EVERYWHERE });
+
+		await polite("https://api.openalex.org/works?search=x");
+
+		expect(headers.get("api.openalex.org")?.get("user-agent")).not.toContain("mailto:");
+	});
+
+	// A variable left set to whitespace should read as unset, not produce
+	// `(mailto:)` in a header.
+	it("treats a blank contact address as unset", async () => {
+		process.env["SCRIBARIUM_CONTACT_EMAIL"] = "   ";
+		const { fetch, headers } = capturing();
+		const polite = createPoliteFetcher({ fetch, ...EVERYWHERE });
+
+		await polite("https://api.openalex.org/works?search=x");
+
+		expect(headers.get("api.openalex.org")?.get("user-agent")).not.toContain("mailto");
 	});
 
 	// A silent backoff of up to a minute is indistinguishable from a hang, and the

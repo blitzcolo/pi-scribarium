@@ -246,10 +246,20 @@ environment variables make it behave better under load, and neither is a secret:
 | Variable | Effect |
 |---|---|
 | `SEMANTIC_SCHOLAR_API_KEY` | Raises that backend's rate limit. Free, on request from Semantic Scholar |
-| `SCRIBARIUM_MAILTO` | Your email, sent to OpenAlex; puts you in its faster "polite pool" |
+| `SCRIBARIUM_CONTACT_EMAIL` | An address identifying you to the search APIs; puts you in OpenAlex's faster "polite pool" |
 
 Without them the search still works — it is throttled harder, and a busy day
 means more retries, which the run reports rather than hides.
+
+Nothing is emailed to that address and no mail is sent at all; there is no SMTP
+anywhere in this tool. `mailto:` is how these APIs spell "who is calling", and
+the address travels only as a string — in the `User-Agent` header, and in
+OpenAlex's `mailto=` query parameter, which is what its terms ask for.
+
+**Each value goes only where it is needed.** The address is offered to the three
+search APIs that ask for one, and the API key only to Semantic Scholar. Neither
+is attached to a PDF download, so the publisher servers papers are fetched from
+receive nothing but the tool's name and version.
 
 ## Costs
 
@@ -258,7 +268,7 @@ Two dials, set per run:
 ```bash
 scribarium run \
   --var bulk=deepseek/deepseek-v4-flash \
-  --var judgement=anthropic/claude-opus-4-5
+  --var judgement=anthropic/claude-fable-5
 # bulk      → one call per corpus paper
 # judgement → synthesis and writing
 ```
@@ -385,7 +395,7 @@ paper*, but *is this idea already taken*.
 scribarium run explore --workspace ~/my-project \
   --var direction="what you want to work on, in any language" \
   --var name=thermal-fusion \
-  --var bulk=deepseek/deepseek-v4-flash --var judgement=kimi-coding/k3-256k
+  --var bulk=deepseek/deepseek-v4-flash --var judgement=kimi-coding/k3
 ```
 
 It reads your own work in `source/`, proposes candidate contributions, searches
@@ -423,7 +433,9 @@ and analysed papers are cached on their file times, so a killed run resumes owin
 only what it had not finished.
 
 Optional environment variables: `SEMANTIC_SCHOLAR_API_KEY` raises that backend's
-rate limit, and `SCRIBARIUM_MAILTO` puts you in OpenAlex's polite pool.
+rate limit, and `SCRIBARIUM_CONTACT_EMAIL` puts you in OpenAlex's polite pool.
+Neither is sent to the publisher servers PDFs are downloaded from, and nothing
+is ever emailed — see [Models and credentials](#models-and-credentials).
 
 **Read the verdicts, not just the table.** Every verdict discloses what it rests
 on — how many papers were read in full, how many only as abstracts, how many

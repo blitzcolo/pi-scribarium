@@ -119,7 +119,7 @@ git tag v<version> && git push origin v<version>
   `lib/commands/publish.js` guards its own private check with `if (workspace && manifest.private)`,
   so a non-workspace package skips it, and the unconditional check lives in
   `libnpmpublish/lib/publish.js` — which sits behind `if (!dryRun)`. A real `npm publish` therefore
-  throws `EPRIVATE` before uploading anything, but a dry-run prints `+ pi-scribarium@0.2.0` and
+  throws `EPRIVATE` before uploading anything, but a dry-run prints `+ pi-scribarium@0.3.0` and
   looks like it worked. Do not use `--dry-run` to test whether `private` is effective.
 - **`prepack` runs the build**, so a packed tarball can never contain a stale `dist/`. There is no
   `prepublishOnly`: `private` makes it unreachable, and the gate it held now lives in `release`.
@@ -387,6 +387,14 @@ appears in it.
 - **A dead backend is a value, not an exception.** It becomes a warning on an `ok` result and the
   other two continue; one index being down should narrow a search, not end a paid run. The warning
   matters because a short result list otherwise reads as a short literature.
+- **Credentials and the contact address are scoped per host, not set globally.** `withDefaults`
+  once attached both to every request, so a run downloading a hundred PDFs handed the Semantic
+  Scholar key and the user's email to every publisher server it touched — neither of which had
+  asked. The key now goes only to `api.semanticscholar.org`; the address only to the three API
+  hosts in `CONTACT_HOSTS`, which deliberately excludes `arxiv.org` (the PDF host) even though it
+  is the same organisation as `export.arxiv.org`. The rule is "the endpoint that asked", kept
+  literal so it can be checked. `SCRIBARIUM_CONTACT_EMAIL` is named for what it is: nothing is
+  emailed, and `mailto:` is only how these APIs spell identification.
 - **Retries and rate-limit waits are announced** through `PoliteFetcherOptions.onNotice`, which the
   searching builtins route into their progress output. This is gotcha #21 applied to the HTTP layer:
   a backoff of up to a minute is indistinguishable from a hang, and the operator's natural response

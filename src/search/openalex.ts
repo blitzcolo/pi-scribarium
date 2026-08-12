@@ -67,10 +67,12 @@ export async function searchOpenAlex(
 }
 
 function buildUrl(spec: QuerySpec, limit: number, base: string): string | undefined {
-	const mailto = process.env["SCRIBARIUM_MAILTO"];
+	// OpenAlex reads the contact from a query parameter rather than the header.
 	// The polite pool is a documented courtesy: identified clients get the higher
 	// rate limit, anonymous ones get throttled first when the service is busy.
-	const contact = mailto !== undefined && mailto !== "" ? `&mailto=${encodeURIComponent(mailto)}` : "";
+	const email = process.env["SCRIBARIUM_CONTACT_EMAIL"]?.trim();
+	const contact =
+		email === undefined || email === "" ? "" : `&mailto=${encodeURIComponent(email)}`;
 
 	if (spec.kind === "id") {
 		if (spec.doi !== undefined && spec.doi !== "") {
