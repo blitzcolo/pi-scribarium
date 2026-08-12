@@ -204,10 +204,13 @@ async function adoptInbox(options: FetchPapersOptions): Promise<number> {
 			identifiers(paper).some((identifier) => firstPage.includes(identifier)),
 		);
 		if (hits.length !== 1) {
+			// Names both identifiers, because it matches on either: the message said
+			// "no DOI" and sent someone looking for one on an arXiv preprint, which
+			// prints an id in the margin and no DOI at all.
 			const why =
 				hits.length === 0
-					? "no DOI from the missing list on its first page"
-					: `first page carries ${hits.length} of the missing DOIs`;
+					? "first page carries no DOI or arXiv id from the missing list"
+					: `first page matches ${hits.length} papers from the missing list`;
 			options.onProgress?.(`  inbox     ${name}: ${why} — left in ${INBOX}/`);
 			continue;
 		}

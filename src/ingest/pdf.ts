@@ -114,9 +114,16 @@ export async function extractPdfPages(pdfPath: string): Promise<string[]> {
 	ensureSumPrecise();
 	// Imported lazily: unpdf pulls in a pdf.js build, which is far too heavy to
 	// load for commands that never touch a PDF.
-	const { extractText } = await import("unpdf");
+	const { extractText, getDocumentProxy } = await import("unpdf");
 	const data = new Uint8Array(await fsp.readFile(pdfPath));
-	const { text } = await extractText(data, { mergePages: false });
+	// Errors only. pdf.js reports every malformed glyph in an embedded font, and
+	// real papers are full of them: one 31-page PDF emitted 2847 lines of
+	// "Not enough parameters for vstem" and buried the ingest progress it was
+	// interleaved with, which is the output a human is actually reading. Measured
+	// byte-identical extraction with them silenced — and a structural failure is
+	// an error rather than a warning, so the one thing worth hearing still throws.
+	const document = await getDocumentProxy(data, { verbosity: 0 });
+	const { text } = await extractText(document, { mergePages: false });
 	return text;
 }
 
