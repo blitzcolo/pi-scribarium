@@ -331,3 +331,70 @@ describe("non-document files", () => {
 		},
 	);
 });
+
+/**
+ * `<dir>/text/` is derived. An output nobody claims is a leftover, and the
+ * analysis fan-out that globs this directory cannot tell one from a paper.
+ */
+describe("orphaned outputs", () => {
+	it("deletes an output whose source is gone", async () => {
+		const source = writePdf("kept.pdf", ["KEPT"]);
+		await ingestCorpus({ inputs: [source], outDir });
+
+		fs.writeFileSync(path.join(outDir, "deleted-paper.md"), "# text of a paper since removed");
+
+		const result = await ingestCorpus({ inputs: [source], outDir });
+
+		expect(result.pruned).toEqual(["deleted-paper.md"]);
+		expect(fs.existsSync(path.join(outDir, "deleted-paper.md"))).toBe(false);
+		expect(fs.existsSync(path.join(outDir, "kept.md"))).toBe(true);
+	});
+
+	/**
+	 * The regression this was written for. `slug()` acquired an 80-character cap
+	 * when it moved to `src/util/`; ingest had never capped, so every
+	 * already-extracted document with a longer name was looked up under a name
+	 * that did not exist and re-extracted beside itself. A 22-paper corpus came
+	 * back as 42 documents, and the fan-out stopped the run only because both
+	 * halves slug to one id — a slightly different cap and it would have
+	 * analysed and cited every paper twice instead.
+	 */
+	it("removes the old name when the naming rule changes", async () => {
+		const long = `${"n".repeat(70)}-suffix-past-the-cap`;
+		const source = writePdf(`${long}.pdf`, ["BODY"]);
+
+		const current = `${slugify(source)}.md`;
+		expect(current.length).toBeLessThan(long.length);
+		// What ingest would have written before the cap existed.
+		fs.mkdirSync(outDir, { recursive: true });
+		fs.writeFileSync(path.join(outDir, `${long}.md`), "extracted under the previous rule");
+
+		const result = await ingestCorpus({ inputs: [source], outDir });
+
+		expect(result.pruned).toEqual([`${long}.md`]);
+		expect(fs.readdirSync(outDir)).toEqual([current]);
+	});
+
+	it("keeps an output whose source failed this run", async () => {
+		const source = writePdf("paper.pdf", ["GOOD"]);
+		await ingestCorpus({ inputs: [source], outDir });
+		fs.writeFileSync(source, "not a pdf any more");
+
+		const result = await ingestCorpus({ inputs: [source], outDir, force: true });
+
+		expect(result.failed).toBe(1);
+		expect(result.pruned).toEqual([]);
+		expect(fs.existsSync(path.join(outDir, "paper.md"))).toBe(true);
+	});
+
+	it("leaves non-Markdown alone", async () => {
+		const source = writePdf("paper.pdf", ["BODY"]);
+		fs.mkdirSync(outDir, { recursive: true });
+		fs.writeFileSync(path.join(outDir, "notes.json"), "{}");
+
+		const result = await ingestCorpus({ inputs: [source], outDir });
+
+		expect(result.pruned).toEqual([]);
+		expect(fs.existsSync(path.join(outDir, "notes.json"))).toBe(true);
+	});
+});

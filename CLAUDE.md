@@ -286,6 +286,19 @@ load-bearing, not organisational:
 - **Ingest is per directory**, into `<dir>/text/`. `source/` uses `only: pdf` — its Markdown and
   LaTeX are already readable in place, and copying them would show a writer the same material at
   two paths. `references/` and `source/` are `optional: true`; an empty `corpus/` is still fatal.
+- **`<dir>/text/` is derived, so ingest prunes it.** Every file there is named from a source that
+  was present when it ran, and the analysis fan-out globs the directory and cannot tell a leftover
+  from a paper — so an output no current source claims is deleted, announced per file, and counted
+  in the summary. Warning instead was tried by accident and failed: ingest already prints a line
+  per document, and one more among 135 is not a signal. Two ways a leftover appears, both seen in
+  the wild. **The output name changed** — `slug()` acquired an 80-character cap when it moved to
+  `src/util/slug.ts` and ingest had never capped, so every already-extracted document with a longer
+  name was looked up under a name that did not exist and re-extracted beside itself; a 22-paper
+  corpus came back as 42, and only `assertDistinctIds` stopped the run, because both halves slug to
+  one id. A slightly different cap and the run would have analysed and cited every paper twice.
+  **The source was removed** — deleting a PDF left its text behind, so papers dropped from a corpus
+  kept being analysed and kept turning up as evidence. An output whose source failed *this* run is
+  not a leftover: its source is right there, and last run's extraction is still the best available.
 - **Scan detection is per page, never on the total.** A ten-page scan with one readable page sums
   to a plausible character count, and the analyst — told to read the paper start to finish — cannot
   tell it got a tenth of one. `MIN_PAGE_CHARACTERS = 100` is calibrated against a real 22-paper

@@ -51,6 +51,8 @@ export const MAX_TEXTLESS_FRACTION = 0.5;
 
 export interface IngestResult {
 	files: IngestedFile[];
+	/** Outputs deleted because no current source produces them. Basenames. */
+	pruned: string[];
 	get succeeded(): number;
 	get failed(): number;
 }
@@ -63,6 +65,8 @@ export interface IngestOptions {
 	/** Re-extract even when the output is newer than the source. */
 	force?: boolean;
 	onProgress?: (file: IngestedFile) => void;
+	/** Called once per output deleted for having no source. */
+	onPrune?: (name: string) => void;
 }
 
 // `.tex` is passed through as-is: it is already text, and the markup carries
@@ -159,8 +163,11 @@ export async function ingestCorpus(options: IngestOptions): Promise<IngestResult
 		options.onProgress?.(record);
 	}
 
+	const pruned = await pruneOrphans(options.outDir, files, options.onPrune);
+
 	return {
 		files,
+		pruned,
 		get succeeded() {
 			return files.filter((f) => f.status !== "failed").length;
 		},
@@ -168,6 +175,59 @@ export async function ingestCorpus(options: IngestOptions): Promise<IngestResult
 			return files.filter((f) => f.status === "failed").length;
 		},
 	};
+}
+
+/**
+ * Delete outputs in `outDir` that no current source produces.
+ *
+ * `<dir>/text/` is derived: ingest is the only writer, and every file in it is
+ * named from a source file that was present when it ran. So an output nobody
+ * claims is not a document — it is a leftover, and leaving it costs real money,
+ * because the analysis fan-out globs this directory and cannot tell the
+ * difference.
+ *
+ * Two ways one appears, both seen in the wild:
+ *
+ * - **The output name changed.** `slug()` acquired an 80-character cap when it
+ *   moved to `src/util/`; ingest had never capped. Every already-extracted
+ *   document with a longer name was therefore looked up under a name that did
+ *   not exist, re-extracted beside itself, and the corpus silently doubled. The
+ *   fan-out caught it only because both halves slug to one id and it refuses to
+ *   let two items race on a path — had the cap been slightly different, the run
+ *   would have analysed and cited every paper twice instead.
+ * - **The source was removed.** Deleting a PDF left its text behind, so papers
+ *   dropped from a corpus kept being analysed, and kept turning up as evidence.
+ *
+ * Pruning rather than warning, because a warning is what the second case
+ * already had: ingest prints a line per document, and one more among a hundred
+ * and thirty-five is not a signal. The delete is announced per file and the
+ * count reaches the step summary.
+ */
+async function pruneOrphans(
+	outDir: string,
+	files: readonly IngestedFile[],
+	onPrune?: (name: string) => void,
+): Promise<string[]> {
+	// Every input's output, whatever became of it. A document that failed to
+	// extract this run may still have a good output from the last one, and that
+	// is not an orphan — its source is right there.
+	const expected = new Set(files.map((file) => path.basename(file.outputPath)));
+
+	let present: string[];
+	try {
+		present = await fsp.readdir(outDir);
+	} catch {
+		return [];
+	}
+
+	const pruned: string[] = [];
+	for (const name of present.sort()) {
+		if (!name.endsWith(".md") || expected.has(name)) continue;
+		await fsp.rm(path.join(outDir, name), { force: true });
+		pruned.push(name);
+		onPrune?.(name);
+	}
+	return pruned;
 }
 
 async function ingestOne(

@@ -577,13 +577,17 @@ async function runIngest(step: BuiltinStepSpec, ctx: BuiltinContext): Promise<Bu
 					: "";
 			ctx.onProgress?.(`  ${file.status.padEnd(9)} ${label}${gaps}`);
 		},
+		onPrune: (name) => ctx.onProgress?.(`  ${"pruned".padEnd(9)} ${name} (no source)`),
 	});
 
 	const failures = result.files.filter((file) => file.status === "failed");
+	const pruned = result.pruned.length === 0 ? "" : `, ${result.pruned.length} pruned`;
 	if (failures.length === 0) {
 		return {
 			ok: true,
-			summary: `${result.succeeded} document(s) ready in ${path.relative(ctx.workspace, outDir)}`,
+			summary:
+				`${result.succeeded} document(s) ready in ` +
+				`${path.relative(ctx.workspace, outDir)}${pruned}`,
 		};
 	}
 

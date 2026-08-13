@@ -427,6 +427,7 @@ async function commandIngest(args: ParsedArgs): Promise<number> {
 
 	let failed = 0;
 	let ingested = 0;
+	let pruned = 0;
 
 	for (const target of targets) {
 		if (target.inputs.length === 0) {
@@ -461,17 +462,23 @@ async function commandIngest(args: ParsedArgs): Promise<number> {
 					`  ${file.status.padEnd(9)} ${label}${pages}${pages === "" ? "" : `${gaps})`}\n`,
 				);
 			},
+			onPrune: (name) => {
+				process.stdout.write(`  ${"pruned".padEnd(9)} ${name} (no source)\n`);
+			},
 		});
 
 		failed += result.failed;
 		ingested += result.succeeded;
+		pruned += result.pruned.length;
 		if (targets.length > 1) {
 			process.stdout.write(`  -> ${result.succeeded} in ${path.relative(workspace, target.outDir)}\n`);
 		}
 	}
 
 	process.stdout.write(
-		`\n${ingested} document(s) ready` + (failed > 0 ? `, ${failed} failed\n` : "\n"),
+		`\n${ingested} document(s) ready` +
+			(pruned > 0 ? `, ${pruned} pruned` : "") +
+			(failed > 0 ? `, ${failed} failed\n` : "\n"),
 	);
 	return failed > 0 ? 1 : 0;
 }
