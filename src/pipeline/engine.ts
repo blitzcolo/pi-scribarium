@@ -361,8 +361,8 @@ async function executeGate(
 	(stepState.decisions ??= []).push({
 		at: new Date().toISOString(),
 		kind: decision.kind,
-		...(decision.kind === "reject" ? { feedback: decision.feedback } : {}),
-		...(decision.kind === "reject" && decision.target !== undefined
+		...(decision.kind === "revise" ? { feedback: decision.feedback } : {}),
+		...(decision.kind === "revise" && decision.target !== undefined
 			? { target: decision.target }
 			: {}),
 	});
@@ -387,7 +387,7 @@ async function executeGate(
 			store.save(state);
 			return { kind: "abort" };
 
-		case "reject": {
+		case "revise": {
 			const target = decision.target ?? step.onReject;
 			// The target must be a step of *this* spec that has already run. A
 			// `--force-pipeline` resume can drop a step the run's state still
@@ -403,9 +403,10 @@ async function executeGate(
 					code: "BUILTIN_ERROR",
 					message:
 						target === undefined
-							? `rejected, but there is nothing to regenerate: ` +
+							? `sent back for revision, but there is nothing to regenerate: ` +
 								`gate "${step.id}" has no on_reject target`
-							: `rejected, but "${target}" is not a step of this run that has already run`,
+							: `sent back for revision, but "${target}" is not a step of this run ` +
+								`that has already run`,
 				};
 				store.save(state);
 				return { kind: "abort" };
@@ -418,7 +419,7 @@ async function executeGate(
 			// step between the target and this gate was written against the artifact
 			// that is about to change; left `completed`, the main loop skips it and
 			// the gate re-opens showing exactly the output the reviewer just
-			// rejected — an approve/reject loop with nothing changing between turns.
+			// sent back — an approve/revise loop with nothing changing between turns.
 			// Later gates lose their approval for the same reason it was given: it
 			// was an approval of the old version. Same rule as `scribarium redo`.
 			for (const candidate of options.spec.steps.slice(targetIndex)) {

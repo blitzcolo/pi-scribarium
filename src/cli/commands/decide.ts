@@ -9,7 +9,7 @@ import { RunStateStore } from "../../workspace/run-state.js";
  *
  * Recording a decision touches only files on disk, but `resume.ts` pulls in the
  * agent SDK — and importing that costs real time before anything runs. Approve
- * and reject are the two commands a reviewer types most often, and they should
+ * and revise are the two commands a reviewer types most often, and they should
  * not wait for a runtime they never use.
  *
  * Record a reviewer's decision for a pending gate.

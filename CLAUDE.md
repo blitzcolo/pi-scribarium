@@ -32,7 +32,7 @@ mount**, and a static import charges that to every command, `--help` included.
 
 - Commands that need a model — `run`, `resume`, `validate`, `run-agent`, `agents` — reach their
   modules through `await import(...)` inside their own branch. The rest (`init`, `status`,
-  `report`, `events`, `redo`, `ingest`, `approve`, `reject`) load none of it: measured 22.1 s → 0.9 s.
+  `report`, `events`, `redo`, `ingest`, `approve`, `revise`) load none of it: measured 22.1 s → 0.9 s.
 - `resolveWorkspace()` is SDK-free; `resolveAgentDir()` is async and imports `getAgentDir` lazily.
   Do **not** reimplement `getAgentDir` locally to avoid the import — it encodes pi's own notion of
   where its config lives and would diverge silently.
@@ -498,10 +498,10 @@ second round — because everything downstream is priced per candidate.
   CI. A run piped to a log must never block on a prompt nobody can see.
   `--gate-mode` forces one; `--yes` approves everything.
 - **File mode** writes `runs/<id>/gates/<step>.request.json`, persists, and exits
-  **10**. The decision arrives later via `scribarium approve|reject`, so a long
+  **10**. The decision arrives later via `scribarium approve|revise`, so a long
   unattended batch does not hold a session open waiting for a human who may be
   asleep.
-- **A decision is consumed once.** Leaving it in place would re-reject the
+- **A decision is consumed once.** Leaving it in place would re-revise the
   regenerated work forever without ever asking again.
 - **`optional: true` skips a gate whose `show:` artifacts are all absent or
   empty**, for gates that only sometimes have a decision to offer. `explore`'s
@@ -514,7 +514,7 @@ second round — because everything downstream is priced per candidate.
   reopen it forever. An optional gate with no `show:` at all is refused at load
   time — it can never be skipped, so it reads as unobtrusive and behaves as
   blocking.
-- **Keeping a subset is a third answer, not a soft rejection.** `select:` names a
+- **Keeping a subset is a third answer, not a soft revision.** `select:` names a
   JSON array the reviewer may cut down; `approve --keep a,b` deletes the rest and
   proceeds. Rejection regenerates the whole list, which is the wrong tool when
   most of it is fine. The filter is deterministic on purpose — dropping array
@@ -544,10 +544,23 @@ second round — because everything downstream is priced per candidate.
     nothing.
   - Pruning is also a depth decision, not only a spend one: the round-one cap is
     100 papers shared round-robin across every surviving candidate's queries.
-- **Rejection rewinds** to `on_reject` and stores the feedback on that step; the
+- **A revision rewinds** to `on_reject` and stores the feedback on that step; the
   retry folds it into the prompt with the previous attempt in
   `<previous_attempt>` tags. The gate then reopens — regenerated work still needs
   approval. `on_reject` must name an *earlier* step, checked at load time.
+  - **The reviewer-facing verb is `revise`; the on-disk names stayed `reject`.**
+    `[a]pprove [r]eject` read as "accept this or throw it away", so a reviewer
+    with notes could not see where their notes would go — which is the one thing
+    a gate exists to collect. Renamed everywhere a human reads it: the terminal
+    prompt, `scribarium revise` (with `reject` kept as a CLI alias), the file
+    protocol's `howToRespond`, and the heading the previous attempt arrives
+    under in the retry's prompt. Two names did **not** change. The `on_reject:`
+    pipeline key, because every pipeline already written uses it and a schema
+    with two spellings for one key trades one confusion for another. And the
+    `kind: "reject"` in a `gates/<step>.decision.json` written before the
+    rename, which `readDecision` still accepts and normalises — a decision is a
+    file on disk, and the file protocol exists precisely so the process can exit
+    and come back later, possibly across an upgrade.
 - **Regeneration is a fresh session, not a steer.** By the time a gate is
   answered the step's session is disposed and in file mode the process has
   exited, so there is nothing left to steer. Passing the previous attempt and the

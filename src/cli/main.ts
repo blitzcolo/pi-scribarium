@@ -29,7 +29,7 @@ import type { RunStageResult } from "../runtime/run-stage.js";
  * The SDK is ~20 000 files. Resolving them costs about 0.4 s on a local disk
  * and, measured on a WSL2 9p mount, over twenty — and a top-level import makes
  * every command pay it, including `--help`. Roughly half the command surface
- * (init, status, report, events, redo, ingest, approve, reject) touches no
+ * (init, status, report, events, redo, ingest, approve, revise) touches no
  * model at all and now loads none of it.
  *
  * The rule is mechanical: if a module transitively imports
@@ -48,7 +48,7 @@ Commands:
   resume [runId]            Continue a run that stopped at a gate or a failure
   redo <step> [runId]       Re-open a finished step (and everything after it)
   approve [runId] [step]    Approve a pending gate (--keep to prune its list first)
-  reject  [runId] [step]    Reject a gate and regenerate (-m "what to change")
+  revise  [runId] [step]    Send a gate back with notes (-m "what to change")
   status [runId]            Where a run got to (defaults to the latest run)
   report [runId]            Token and cost accounting per step
   events [runId]            Append-only log of what happened
@@ -77,8 +77,8 @@ approve options:
   --keep <id,id>            Keep only these entries of the gate's list and delete
                             the rest (repeatable). Only for a gate with select:.
 
-reject options:
-  -m, --message <text>      Feedback folded into the regenerated step's prompt
+revise options (alias: reject):
+  -m, --message <text>      Notes folded into the regenerated step's prompt
   --target <stepId>         Regenerate this step instead of the gate's on_reject
 
 Exit codes: 0 ok · 1 failed · 2 usage/config · 3 preflight · 10 awaiting gate · 130 interrupted
@@ -215,14 +215,17 @@ async function main(argv: readonly string[]): Promise<number> {
 				...(keep !== undefined ? { keep } : {}),
 			});
 		}
+		// `reject` was this command's name for one release; kept so a script or a
+		// printed instruction from an older run does not fail on a renamed verb.
+		case "revise":
 		case "reject": {
 			const feedback = flagString(args, "message", "m");
 			if (feedback === undefined) {
-				throw new UsageError('reject requires -m "what to change".');
+				throw new UsageError(`${command} requires -m "what to change".`);
 			}
 			const target = flagString(args, "target");
 			return commandDecide(resolveWorkspace(args), args.positionals[0], args.positionals[1], {
-				kind: "reject",
+				kind: "revise",
 				feedback,
 				...(target !== undefined ? { target } : {}),
 			});

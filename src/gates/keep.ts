@@ -162,7 +162,7 @@ export function applyKeep(options: ApplyKeepOptions): KeepResult {
 	if (requested.size === 0) {
 		throw new KeepError(
 			`Keeping nothing would leave the run with an empty list at ${relativeFile}. ` +
-				`Reject the gate to regenerate, or quit.`,
+				`Revise the gate to regenerate the list, or quit.`,
 		);
 	}
 

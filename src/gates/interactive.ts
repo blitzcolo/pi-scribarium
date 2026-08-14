@@ -23,8 +23,8 @@ export function createInteractiveGate(): GateHandler {
 			const selectable = request.selectable;
 			const canKeep = selectable !== undefined && selectable.items.length > 0;
 			const prompt = canKeep
-				? "\n[a]pprove all  [k]eep some  [r]eject  [s]kip  [q]uit  [v]iew again > "
-				: "\n[a]pprove  [r]eject  [s]kip  [q]uit  [v]iew again > ";
+				? "\n[a]pprove all  [k]eep some  [r]evise  [s]kip  [q]uit  [v]iew again > "
+				: "\n[a]pprove  [r]evise  [s]kip  [q]uit  [v]iew again > ";
 
 			for (;;) {
 				const answer = (await rl.question(prompt)).trim().toLowerCase();
@@ -60,14 +60,15 @@ export function createInteractiveGate(): GateHandler {
 						break;
 
 					case "r":
+					case "revise":
 					case "reject": {
 						const feedback = await readFeedback(rl);
 						if (feedback.length === 0) {
-							process.stdout.write("Rejection needs a reason; nothing recorded.\n");
+							process.stdout.write("A revision needs notes; nothing recorded.\n");
 							break;
 						}
 						return {
-							kind: "reject",
+							kind: "revise",
 							feedback,
 							...(request.step.onReject !== undefined ? { target: request.step.onReject } : {}),
 						};
@@ -175,7 +176,13 @@ function truncate(value: string, limit: number): string {
 
 /** Multi-line feedback, terminated by a lone "." so paragraphs are possible. */
 async function readFeedback(rl: readline.Interface): Promise<string> {
-	process.stdout.write("\nWhat should change? End with a single '.' on its own line.\n");
+	// Says what happens to the current attempt, because the reviewer is being
+	// asked to spend effort writing notes and deserves to know they are handed
+	// to the retry rather than thrown away with the draft.
+	process.stdout.write(
+		"\nWhat should change? Your notes and the current attempt both go to the retry.\n" +
+			"End with a single '.' on its own line.\n",
+	);
 	const lines: string[] = [];
 	for (;;) {
 		const line = await rl.question("| ");

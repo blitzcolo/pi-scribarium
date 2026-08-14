@@ -179,12 +179,12 @@ describe("gates", () => {
 	});
 
 	// The core of regenerate-with-feedback.
-	it("reject then resume re-runs only the target, with the feedback in its prompt", async () => {
+	it("revise then resume re-runs only the target, with the feedback in its prompt", async () => {
 		const { final: halted, scripted } = await execute(scribe());
 		const requestsAfterHalt = scripted.requests.length;
 
 		writeDecision(layout, "approve-outline", {
-			kind: "reject",
+			kind: "revise",
 			feedback: "Add a limitations subsection.",
 		});
 		const { final } = await execute(scribe(), halted, scripted);
@@ -206,7 +206,7 @@ describe("gates", () => {
 		expect(fs.readFileSync(path.join(workspace, "outline/outline.md"), "utf-8")).toContain("# v2");
 
 		const decisions = final.steps["approve-outline"]?.decisions ?? [];
-		expect(decisions[0]).toMatchObject({ kind: "reject", feedback: "Add a limitations subsection." });
+		expect(decisions[0]).toMatchObject({ kind: "revise", feedback: "Add a limitations subsection." });
 	});
 
 	// The shipped pipeline rejects `approve-review` back into `write`, a fan-out,
@@ -222,7 +222,7 @@ describe("gates", () => {
 		expect(first.final.steps["assemble"]?.attempts).toBe(1);
 
 		writeDecision(layout, "approve-draft", {
-			kind: "reject",
+			kind: "revise",
 			feedback: "Tighten the methods.",
 		});
 		const second = await execute(script, first.final, first.scripted, FANOUT_PIPELINE);
@@ -245,7 +245,7 @@ describe("gates", () => {
 	});
 
 	// `readDecision` was only ever consulted by the file gate, but the workflow the
-	// CLI itself prints — reject with -m, then resume — is normally typed at a
+	// CLI itself prints — revise with -m, then resume — is normally typed at a
 	// terminal, where selectGate picks the interactive gate. The recorded feedback
 	// was discarded, the reviewer re-prompted as though they had said nothing, and
 	// the stale decision left on disk for a later run to consume.
@@ -277,12 +277,31 @@ describe("gates", () => {
 
 	it("consumes a decision so the regenerated work is reviewed again", async () => {
 		const { final: halted, scripted } = await execute(scribe());
-		writeDecision(layout, "approve-outline", { kind: "reject", feedback: "More detail." });
+		writeDecision(layout, "approve-outline", { kind: "revise", feedback: "More detail." });
 		const { final } = await execute(scribe(), halted, scripted);
 
-		// A decision left in place would re-reject forever without ever asking.
+		// A decision left in place would re-revise forever without ever asking.
 		expect(fs.existsSync(gateRequestFile(layout, "approve-outline"))).toBe(true);
 		expect(final.steps["approve-outline"]?.status).toBe("awaiting");
+	});
+
+	/**
+	 * `revise` was called `reject` for one release. A decision is a file on
+	 * disk, so a run left waiting across the upgrade — exactly the case the file
+	 * protocol exists to serve, since the process exits and comes back later —
+	 * would otherwise have its answer read as malformed and be asked again.
+	 */
+	it("still reads a decision recorded under the old name", async () => {
+		const { final: halted, scripted } = await execute(scribe());
+		fs.writeFileSync(
+			gateDecisionFile(layout, "approve-outline"),
+			JSON.stringify({ kind: "reject", feedback: "Add a limitations subsection." }),
+		);
+		const { final } = await execute(scribe(), halted, scripted);
+
+		expect(final.steps["outline"]?.pendingFeedback).toBeUndefined();
+		const decisions = final.steps["approve-outline"]?.decisions ?? [];
+		expect(decisions[0]).toMatchObject({ kind: "revise" });
 	});
 
 	it("abort stops the run", async () => {

@@ -8,8 +8,18 @@ export type GateDecision =
 	 * Absent means keep everything, which is what an unattended `--yes` does.
 	 */
 	| { kind: "approve"; keep?: string[] }
-	/** Re-run `target` with `feedback` folded into its prompt. */
-	| { kind: "reject"; feedback: string; target?: string }
+	/**
+	 * Re-run `target` with `feedback` folded into its prompt.
+	 *
+	 * Called `revise` because that is what it does: the feedback is required,
+	 * the previous attempt is handed to the retry alongside it, and the gate
+	 * reopens. It was called `reject` for one release, and the terminal prompt
+	 * offering `[a]pprove [r]eject` read as "accept this or throw it away" —
+	 * a reviewer with notes could not see where their notes went, which is the
+	 * one thing a gate exists to collect. Decisions written under the old name
+	 * are still read (see `readDecision`), so a run waiting on one survives.
+	 */
+	| { kind: "revise"; feedback: string; target?: string }
 	/** Continue past the gate without approving; the step is marked skipped. */
 	| { kind: "skip" }
 	| { kind: "abort" };

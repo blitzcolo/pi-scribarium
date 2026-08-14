@@ -150,7 +150,7 @@ scribarium run --workspace . --var topic="your topic in a sentence"
 The run stops at \`approve-outline\` for review. Then:
 
 \`\`\`bash
-scribarium reject  -m "what to change"   # regenerates the outline with your notes
+scribarium revise  -m "what to change"   # regenerates the outline with your notes
 scribarium approve
 scribarium resume
 \`\`\`

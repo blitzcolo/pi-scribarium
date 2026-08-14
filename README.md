@@ -99,7 +99,7 @@ scribarium run --var topic="one sentence describing your paper"
 The run halts at the outline for review:
 
 ```bash
-scribarium reject -m "Add a limitations section; the evaluation needs a baseline"
+scribarium revise -m "Add a limitations section; the evaluation needs a baseline"
 scribarium resume                        # regenerates only the outline
 scribarium approve && scribarium resume  # continues to a full draft
 ```
@@ -313,10 +313,10 @@ return an empty result, which would read exactly like a topic nobody has studied
 
 A gate stops the run for your decision. On a terminal it prompts; piped to a log
 it writes `runs/<id>/gates/<step>.request.json`, exits **10**, and waits for
-`scribarium approve` or `reject`. The same command therefore works by hand and in
+`scribarium approve` or `revise`. The same command therefore works by hand and in
 CI, and an unattended batch never blocks on a prompt nobody can see.
 
-Rejecting rewinds to the step that produced the artifact and re-runs it with your
+Revising rewinds to the step that produced the artifact and re-runs it with your
 feedback and the previous attempt supplied as context. The superseded version is
 archived under `runs/<id>/attempts/`. Regeneration is a fresh session rather than
 a steer — by the time you answer, the original session is gone — which also makes
@@ -334,8 +334,8 @@ Interrupted runs resume per item: a fan-out killed halfway re-runs only the
 papers it did not finish.
 
 Some gates ask you to **cut a list down rather than write feedback**. The
-`explore` pipeline's two both work that way, and rejecting is the wrong tool for
-it: rejection throws the whole list away and regenerates it. Keeping a subset is
+`explore` pipeline's two both work that way, and a revision is the wrong tool for
+it: revising throws the whole list away and regenerates it. Keeping a subset is
 its own answer.
 
 ```bash
@@ -351,7 +351,7 @@ outright — a typo must not silently approve everything or delete everything.
 
 Editing the JSON by hand still works and does more, since it can also reword an
 entry. Use `--keep` for the common case, the editor when the list is right but
-the wording is not, and `reject` when the whole batch missed.
+the wording is not, and `revise` when the whole batch missed.
 
 ## Citation checking
 

@@ -94,7 +94,7 @@ export async function commandRun(options: RunCommandOptions): Promise<number> {
 			process.stdout.write(
 				`\nWaiting for review. Inspect the artifacts, then:\n` +
 					`  scribarium approve ${layout.runId}\n` +
-					`  scribarium reject  ${layout.runId} -m "what to change"\n` +
+					`  scribarium revise  ${layout.runId} -m "what to change"\n` +
 					`  scribarium resume  ${layout.runId}\n`,
 			);
 			return EXIT_AWAITING_GATE;

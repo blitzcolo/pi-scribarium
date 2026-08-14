@@ -64,7 +64,7 @@ export function buildRegeneratePrompt(
 	attempts: readonly ArchivedAttempt[],
 	feedback: string,
 ): string {
-	const parts = [basePrompt, "", "## Previous attempt, rejected by the reviewer"];
+	const parts = [basePrompt, "", "## Previous attempt, returned by the reviewer for revision"];
 
 	if (attempts.length === 0) {
 		parts.push("", "(The previous attempt produced no output.)");

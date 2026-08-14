@@ -69,7 +69,7 @@ export function createFileGate(layout: RunLayout): GateHandler {
 										`${request.selectable.items.length > 1 ? `,${request.selectable.items[1]?.id}` : ""}`,
 								}
 							: {}),
-						reject: `scribarium reject ${request.runId} ${request.step.id} -m "what to change"`,
+						revise: `scribarium revise ${request.runId} ${request.step.id} -m "what to change"`,
 						thenResume: `scribarium resume ${request.runId}`,
 					},
 				},
@@ -82,11 +82,11 @@ export function createFileGate(layout: RunLayout): GateHandler {
 	};
 }
 
-/** Read a decision recorded by `approve` / `reject`, if one is waiting. */
+/** Read a decision recorded by `approve` / `revise`, if one is waiting. */
 export function readDecision(layout: RunLayout, stepId: string): GateDecision | undefined {
 	try {
 		const raw = fs.readFileSync(gateDecisionFile(layout, stepId), "utf-8");
-		const parsed = JSON.parse(raw) as GateDecision;
+		const parsed = JSON.parse(raw) as GateDecision | { kind: "reject"; feedback: string; target?: string };
 		if (parsed.kind === "approve") {
 			// A malformed keep list must not read as "keep everything": that would
 			// approve the whole list the reviewer was trying to cut down.
@@ -97,7 +97,15 @@ export function readDecision(layout: RunLayout, stepId: string): GateDecision | 
 			return { kind: "approve", keep: parsed.keep };
 		}
 		if (parsed.kind === "skip" || parsed.kind === "abort") return parsed;
-		if (parsed.kind === "reject" && typeof parsed.feedback === "string") return parsed;
+		// `reject` is the name this decision was written under before it became
+		// `revise`. Still read, because a decision is a file on disk: a run left
+		// waiting across the upgrade would otherwise be answered into silence.
+		if (
+			(parsed.kind === "revise" || parsed.kind === "reject") &&
+			typeof parsed.feedback === "string"
+		) {
+			return { ...parsed, kind: "revise" };
+		}
 		return undefined;
 	} catch {
 		return undefined;
