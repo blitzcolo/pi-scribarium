@@ -106,10 +106,16 @@ describe("ingest builtin", () => {
 	// was handed the same slug the disambiguator had just invented for the second
 	// `paper.pdf`: two papers written to one file, the second silently clobbering
 	// the first, both reported as extracted.
+	//
+	// The colliding pair differs by punctuation rather than by case: `paper.pdf`
+	// and `Paper.pdf` are one file on Windows and on a default macOS volume, so
+	// that spelling asserted a third document the filesystem had never created.
+	// Both must also sort before `paper-2.pdf` — the invented name has to be
+	// taken before the real one asks for it, which is the whole bug.
 	it("gives every document its own file even when the slugs would collide", async () => {
 		seed("corpus", {
-			"paper.pdf": minimalPdf([bodyPage("FIRST_PAPER")]),
-			"Paper.pdf": minimalPdf([bodyPage("SECOND_PAPER")]),
+			"paper!.pdf": minimalPdf([bodyPage("FIRST_PAPER")]),
+			"paper#.pdf": minimalPdf([bodyPage("SECOND_PAPER")]),
 			"paper-2.pdf": minimalPdf([bodyPage("THIRD_PAPER")]),
 		});
 
