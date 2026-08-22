@@ -319,17 +319,55 @@ describe("LaTeX sources", () => {
 describe("non-document files", () => {
 	// `scribarium init` drops guidance into corpus/, and ingesting it silently
 	// contaminated the journal profile with the tool's own documentation.
-	it.each(["README.md", "readme.md", "_README.md", ".notes.md"])(
-		"does not treat %s as a corpus document",
-		(name) => {
-			fs.writeFileSync(path.join(corpus, name), "guidance, not a paper");
-			fs.writeFileSync(path.join(corpus, "real-paper.md"), "an actual paper");
+	it.each([
+		"README.md",
+		"readme.md",
+		"_README.md",
+		".notes.md",
+		// `build-index` writes references/index.md into the directory ingest
+		// reads, so every run after the first ingested the previous run's index
+		// as if it were a paper.
+		"index.md",
+		"INDEX.md",
+	])("does not treat %s as a corpus document", (name) => {
+		fs.writeFileSync(path.join(corpus, name), "guidance, not a paper");
+		fs.writeFileSync(path.join(corpus, "real-paper.md"), "an actual paper");
 
-			expect(collectCorpusInputs([corpus]).map((p) => path.basename(p))).toEqual([
-				"real-paper.md",
-			]);
-		},
-	);
+		expect(collectCorpusInputs([corpus]).map((p) => path.basename(p))).toEqual([
+			"real-paper.md",
+		]);
+	});
+
+	// A name that merely starts with the word is a paper like any other.
+	it.each(["indexing-schemes.md", "readmels-theorem.md"])("still ingests %s", (name) => {
+		fs.writeFileSync(path.join(corpus, name), "an actual paper");
+
+		expect(collectCorpusInputs([corpus]).map((p) => path.basename(p))).toEqual([name]);
+	});
+
+	// The escape hatch: the check runs while scanning a directory, so a document
+	// genuinely called index.md is still reachable by naming it.
+	it("ingests an explicitly named index.md", () => {
+		const named = path.join(corpus, "index.md");
+		fs.writeFileSync(named, "a paper that happens to be called index");
+
+		expect(collectCorpusInputs([named])).toEqual([named]);
+	});
+
+	// The library that hit this already has the leftover on disk. It is derived,
+	// so the source disappearing is enough to reclaim it — no migration step.
+	it("prunes a text/index.md left by an earlier run", async () => {
+		fs.writeFileSync(path.join(corpus, "index.md"), "# Reference index\n\n183 paper(s).\n");
+		const paper = path.join(corpus, "real-paper.md");
+		fs.writeFileSync(paper, "an actual paper");
+		fs.mkdirSync(outDir, { recursive: true });
+		fs.writeFileSync(path.join(outDir, "index.md"), "# Reference index\n");
+
+		const result = await ingestCorpus({ inputs: collectCorpusInputs([corpus]), outDir });
+
+		expect(result.pruned).toEqual(["index.md"]);
+		expect(fs.existsSync(path.join(outDir, "index.md"))).toBe(false);
+	});
 });
 
 /**

@@ -329,6 +329,16 @@ venue expects, but what is in the library and what each paper can be cited for.
 - **`build-index` is a builtin, not an agent.** Distilling a paper is judgement; collating what
   those calls already produced is not, and re-reading several hundred cards per run would cost more
   than writing them did.
+- **The index is written into the directory ingest reads**, which made it a paper. `cards/` and
+  `text/` are subdirectories and ingest only scans direct children, but `references/index.md` sits
+  right beside the PDFs — so every run after the first extracted the previous run's index to
+  `references/text/index.md`, the fan-out paid to summarise an index of summaries, and `build-index`
+  collated that card back into the index. `isNotADocument` now skips `index.*` alongside `readme.*`,
+  for the same reason and with the same generality: in a directory of papers, a file named `index`
+  is an index *of* the directory. Fixing it by name rather than by moving the output keeps the path
+  every prompt and every reader already knows, and self-heals the libraries that already have the
+  leftover — its source stops being collected, so the existing prune deletes it and announces it.
+  Naming such a file explicitly on the command line still ingests it.
 - **Cards are cached on mtime** (`cache: true`), because a card is a property of the paper, not of
   the run. Without it, several hundred references are re-paid for every run — more than every other
   step combined. mtime rather than a content hash so `touch` is the documented rebuild.

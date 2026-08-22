@@ -80,9 +80,27 @@ const TEXT_EXTENSIONS = new Set([".md", ".txt", ".markdown", ".tex"]);
  * `scribarium init` drops guidance files into corpus/ and source/, and without
  * this they are ingested and analysed as if they were papers from the target
  * journal — quietly contaminating the profile the whole pipeline is built on.
+ *
+ * `index.*` is here for a second reason: `build-index` writes the reference
+ * index to `references/index.md`, which is the directory ingest reads. Every
+ * run after the first therefore extracted the previous run's index into
+ * `references/text/index.md`, where the analysis fan-out cannot tell it from a
+ * paper — so it paid to summarise an index of summaries, and `build-index` then
+ * collated that card back into the index. Caught on a 204-document library. The
+ * rule generalises past our own output the same way `readme.*` does: a file
+ * named `index` in a directory of papers is an index *of* the directory, and
+ * the same reasoning that keeps a README out keeps it out.
+ *
+ * Naming such a file explicitly on the command line still ingests it — this
+ * runs while scanning a directory, never over an argument.
  */
 function isNotADocument(name: string): boolean {
-	return name.startsWith(".") || name.startsWith("_") || /^readme\.[a-z]+$/i.test(name);
+	return (
+		name.startsWith(".") ||
+		name.startsWith("_") ||
+		/^readme\.[a-z]+$/i.test(name) ||
+		/^index\.[a-z]+$/i.test(name)
+	);
 }
 
 /** Filesystem-safe, stable identifier derived from a file name. */
